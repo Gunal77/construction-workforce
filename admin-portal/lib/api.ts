@@ -188,7 +188,7 @@ export const projectsAPI = {
     end_date?: string;
     description?: string;
     budget?: number;
-    client_user_id?: string;
+    client_user_id: string; // Now required
   }) => {
     const response = await fetch('/api/proxy/projects', {
       method: 'POST',
@@ -208,6 +208,7 @@ export const projectsAPI = {
     description?: string;
     budget?: number;
     client_user_id?: string;
+    status?: string;
   }) => {
     const response = await fetch(`/api/proxy/projects/${id}`, {
       method: 'PUT',
@@ -222,6 +223,42 @@ export const projectsAPI = {
   delete: async (id: string) => {
     const response = await fetch(`/api/proxy/projects/${id}`, {
       method: 'DELETE',
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
+  assignStaffs: async (projectId: string, staffIds: string[]) => {
+    const response = await fetch(`/api/proxy/projects/${projectId}/assign-staffs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ staff_ids: staffIds }),
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
+  removeStaff: async (projectId: string, staffId: string) => {
+    const response = await fetch(`/api/proxy/projects/${projectId}/remove-staff/${staffId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
+  getProjectStaffs: async (projectId: string) => {
+    const response = await fetch(`/api/proxy/projects/${projectId}/staffs`, {
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
+  getSupervisors: async () => {
+    const response = await fetch('/api/proxy/projects/supervisors/list', {
       credentials: 'include',
     });
     const data = await response.json();
@@ -275,8 +312,13 @@ export interface Project {
   end_date?: string;
   created_at: string;
   client_user_id?: string;
+  client_name?: string;
   description?: string;
   budget?: number;
+  staff_count?: number;
+  supervisor_name?: string;
+  supervisor_id?: string;
+  status?: string;
 }
 
 // Last End Date API

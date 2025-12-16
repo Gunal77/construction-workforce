@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, MapPin, Calendar, DollarSign, Search } from 'lucide-react';
+import { Building2, MapPin, Calendar, DollarSign, Search, X } from 'lucide-react';
 import ProjectCard from '@/components/ProjectCard';
 
 interface Project {
@@ -14,6 +14,9 @@ interface Project {
   description?: string;
   budget?: number;
   created_at: string;
+  staff_count?: number;
+  supervisor_name?: string;
+  status?: string;
 }
 
 export default function ClientProjectsPage() {
@@ -21,6 +24,7 @@ export default function ClientProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -45,6 +49,15 @@ export default function ClientProjectsPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSearch = () => {
+    setSearchQuery(searchInput);
+  };
+
+  const handleClearSearch = () => {
+    setSearchInput('');
+    setSearchQuery('');
   };
 
   const filteredProjects = projects.filter((project) => {
@@ -83,15 +96,45 @@ export default function ClientProjectsPage() {
 
       {/* Search */}
       <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="relative">
-          <Search className="absolute left-3.5 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search projects by name, location, or description..."
-            className="w-full pl-12 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-          />
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSearch();
+                }
+              }}
+              placeholder="Search projects by name, location, or description..."
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+            />
+            {searchInput && (
+              <button
+                onClick={() => setSearchInput('')}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={handleSearch}
+            className="px-4 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2 whitespace-nowrap"
+          >
+            <Search className="h-5 w-5" />
+            <span>Search</span>
+          </button>
+          {searchQuery && (
+            <button
+              onClick={handleClearSearch}
+              className="px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2 whitespace-nowrap"
+            >
+              <X className="h-5 w-5" />
+              <span>Clear</span>
+            </button>
+          )}
         </div>
       </div>
 

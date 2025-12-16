@@ -7,19 +7,74 @@ const router = express.Router();
 // All routes require admin authentication
 router.use(adminAuthMiddleware);
 
-// GET /admin/projects - Fetch all projects
+// GET /admin/projects - Fetch all projects with enriched data
 router.get('/', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    // Get all projects
+    const { data: projects, error: projectsError } = await supabase
       .from('projects')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch projects' });
+    if (projectsError) {
+      return res.status(500).json({ message: projectsError.message || 'Failed to fetch projects' });
     }
 
-    return res.json({ projects: data || [] });
+    if (!projects || projects.length === 0) {
+      return res.json({ projects: [] });
+    }
+
+    // Enrich projects with client names, staff counts, and supervisors
+    const enrichedProjects = await Promise.all(
+      projects.map(async (project) => {
+        // Get client name
+        let clientName = null;
+        if (project.client_user_id) {
+          const { data: clientUser } = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', project.client_user_id)
+            .maybeSingle();
+          clientName = clientUser?.name || null;
+        }
+
+        // Get staff count
+        const { count: staffCount } = await supabase
+          .from('employees')
+          .select('*', { count: 'exact', head: true })
+          .eq('project_id', project.id);
+
+        // Get assigned supervisor (one per project)
+        const { data: supervisorRelation } = await supabase
+          .from('supervisor_projects_relation')
+          .select('supervisor_id')
+          .eq('project_id', project.id)
+          .limit(1)
+          .maybeSingle();
+
+        let supervisorName = null;
+        let supervisorUserId = null;
+        if (supervisorRelation?.supervisor_id) {
+          const { data: supervisor } = await supabase
+            .from('supervisors')
+            .select('name, user_id')
+            .eq('id', supervisorRelation.supervisor_id)
+            .maybeSingle();
+          supervisorName = supervisor?.name || null;
+          supervisorUserId = supervisor?.user_id || null;
+        }
+
+        return {
+          ...project,
+          client_name: clientName,
+          staff_count: staffCount || 0,
+          supervisor_name: supervisorName,
+          supervisor_id: supervisorUserId || null, // Use user_id from supervisors table
+        };
+      })
+    );
+
+    return res.json({ projects: enrichedProjects });
   } catch (err) {
     console.error('Get projects error', err);
     return res.status(500).json({ message: 'Error fetching projects' });
@@ -118,6 +173,23 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Project name is required' });
     }
 
+    // Client is mandatory
+    if (!client_user_id) {
+      return res.status(400).json({ message: 'Client is required. Each project must be linked to a client.' });
+    }
+
+    // Verify client exists
+    const { data: clientUser, error: clientError } = await supabase
+      .from('users')
+      .select('id, role')
+      .eq('id', client_user_id)
+      .eq('role', 'client')
+      .maybeSingle();
+
+    if (clientError || !clientUser) {
+      return res.status(400).json({ message: 'Invalid client. Client not found or is not a valid client user.' });
+    }
+
     const projectData = {
       name: name.trim(),
       location: location?.trim() || null,
@@ -125,7 +197,7 @@ router.post('/', async (req, res) => {
       end_date: end_date || null,
       description: description?.trim() || null,
       budget: budget != null ? (typeof budget === 'string' ? parseFloat(budget) : budget) : null,
-      client_user_id: client_user_id || null,
+      client_user_id: client_user_id,
     };
 
     const { data, error } = await supabase
@@ -179,6 +251,9 @@ router.put('/:id', async (req, res) => {
     }
     if (client_user_id !== undefined) {
       updateData.client_user_id = client_user_id || null;
+    }
+    if (req.body.status !== undefined) {
+      updateData.status = req.body.status || null;
     }
 
     if (Object.keys(updateData).length === 0) {
@@ -245,8 +320,21 @@ router.post('/:id/assign-supervisor', async (req, res) => {
       return res.status(400).json({ message: 'Project ID is required' });
     }
 
+    // If supervisor_id is null or empty, remove supervisor
     if (!supervisor_id) {
-      return res.status(400).json({ message: 'Supervisor ID is required' });
+      // Remove all supervisor assignments for this project
+      const { error: deleteError } = await supabase
+        .from('supervisor_projects_relation')
+        .delete()
+        .eq('project_id', projectId);
+
+      if (deleteError) {
+        return res.status(500).json({ message: deleteError.message || 'Failed to remove supervisor from project' });
+      }
+
+      return res.json({ 
+        message: 'Supervisor removed from project successfully' 
+      });
     }
 
     // Verify project exists
@@ -260,29 +348,43 @@ router.post('/:id/assign-supervisor', async (req, res) => {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    // Verify supervisor exists
-    const { data: supervisor, error: supervisorError } = await supabase
-      .from('supervisors')
+    // Verify supervisor exists (check in users table with role='supervisor')
+    const { data: supervisorUser, error: supervisorError } = await supabase
+      .from('users')
       .select('id')
       .eq('id', supervisor_id)
+      .eq('role', 'supervisor')
+      .eq('is_active', true)
       .maybeSingle();
 
-    if (supervisorError || !supervisor) {
-      return res.status(404).json({ message: 'Supervisor not found' });
+    if (supervisorError || !supervisorUser) {
+      return res.status(404).json({ message: 'Supervisor not found or inactive' });
     }
 
-    // Assign supervisor to project (using ON CONFLICT to handle duplicates)
+    // Remove existing supervisor assignments for this project (only one supervisor per project)
+    await supabase
+      .from('supervisor_projects_relation')
+      .delete()
+      .eq('project_id', projectId);
+
+    // Get supervisor profile id from supervisors table
+    const { data: supervisorProfile, error: profileError } = await supabase
+      .from('supervisors')
+      .select('id')
+      .eq('user_id', supervisor_id)
+      .maybeSingle();
+
+    if (profileError || !supervisorProfile) {
+      return res.status(404).json({ message: 'Supervisor profile not found' });
+    }
+
+    // Assign new supervisor to project
     const { data, error } = await supabase
       .from('supervisor_projects_relation')
-      .upsert(
-        {
-          supervisor_id,
-          project_id: projectId,
-        },
-        {
-          onConflict: 'supervisor_id,project_id',
-        }
-      )
+      .insert({
+        supervisor_id: supervisorProfile.id,
+        project_id: projectId,
+      })
       .select()
       .single();
 
@@ -363,6 +465,153 @@ router.post('/assign-all-supervisors', async (req, res) => {
   } catch (err) {
     console.error('Assign all supervisors error', err);
     return res.status(500).json({ message: 'Error assigning supervisors to projects' });
+  }
+});
+
+// POST /admin/projects/:id/assign-staffs - Assign multiple staffs to project
+router.post('/:id/assign-staffs', async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+    const { staff_ids } = req.body; // Array of staff IDs
+
+    if (!projectId) {
+      return res.status(400).json({ message: 'Project ID is required' });
+    }
+
+    if (!Array.isArray(staff_ids)) {
+      return res.status(400).json({ message: 'staff_ids must be an array' });
+    }
+
+    // Verify project exists
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', projectId)
+      .maybeSingle();
+
+    if (projectError || !project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Update all selected staff to this project
+    if (staff_ids.length > 0) {
+      const { error: updateError } = await supabase
+        .from('employees')
+        .update({ project_id: projectId })
+        .in('id', staff_ids);
+
+      if (updateError) {
+        return res.status(500).json({ message: updateError.message || 'Failed to assign staffs to project' });
+      }
+    }
+
+    // Get updated staff count
+    const { count: staffCount } = await supabase
+      .from('employees')
+      .select('*', { count: 'exact', head: true })
+      .eq('project_id', projectId);
+
+    return res.json({ 
+      message: `Successfully assigned ${staff_ids.length} staff(s) to project`,
+      staff_count: staffCount || 0
+    });
+  } catch (err) {
+    console.error('Assign staffs error', err);
+    return res.status(500).json({ message: 'Error assigning staffs to project' });
+  }
+});
+
+// DELETE /admin/projects/:id/remove-staff/:staffId - Remove staff from project
+router.delete('/:id/remove-staff/:staffId', async (req, res) => {
+  try {
+    const { id: projectId, staffId } = req.params;
+
+    if (!projectId || !staffId) {
+      return res.status(400).json({ message: 'Project ID and Staff ID are required' });
+    }
+
+    // Verify staff is assigned to this project
+    const { data: staff, error: staffError } = await supabase
+      .from('employees')
+      .select('id, project_id')
+      .eq('id', staffId)
+      .eq('project_id', projectId)
+      .maybeSingle();
+
+    if (staffError || !staff) {
+      return res.status(404).json({ message: 'Staff not found or not assigned to this project' });
+    }
+
+    // Remove staff from project (set project_id to null)
+    const { error: updateError } = await supabase
+      .from('employees')
+      .update({ project_id: null })
+      .eq('id', staffId);
+
+    if (updateError) {
+      return res.status(500).json({ message: updateError.message || 'Failed to remove staff from project' });
+    }
+
+    // Get updated staff count
+    const { count: staffCount } = await supabase
+      .from('employees')
+      .select('*', { count: 'exact', head: true })
+      .eq('project_id', projectId);
+
+    return res.json({ 
+      message: 'Staff removed from project successfully',
+      staff_count: staffCount || 0
+    });
+  } catch (err) {
+    console.error('Remove staff error', err);
+    return res.status(500).json({ message: 'Error removing staff from project' });
+  }
+});
+
+// GET /admin/projects/:id/staffs - Get all staffs assigned to project
+router.get('/:id/staffs', async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+
+    if (!projectId) {
+      return res.status(400).json({ message: 'Project ID is required' });
+    }
+
+    const { data, error } = await supabase
+      .from('employees')
+      .select('id, name, email, phone, role')
+      .eq('project_id', projectId)
+      .order('name', { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ message: error.message || 'Failed to fetch project staffs' });
+    }
+
+    return res.json({ staffs: data || [] });
+  } catch (err) {
+    console.error('Get project staffs error', err);
+    return res.status(500).json({ message: 'Error fetching project staffs' });
+  }
+});
+
+// GET /admin/projects/supervisors/list - Get all supervisors (users with role='supervisor')
+router.get('/supervisors/list', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, email, phone')
+      .eq('role', 'supervisor')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ message: error.message || 'Failed to fetch supervisors' });
+    }
+
+    return res.json({ supervisors: data || [] });
+  } catch (err) {
+    console.error('Get supervisors error', err);
+    return res.status(500).json({ message: 'Error fetching supervisors' });
   }
 });
 

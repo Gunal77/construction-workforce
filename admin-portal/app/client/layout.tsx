@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Building2, LayoutDashboard, LogOut, Menu, X } from 'lucide-react';
+import { Building2, LayoutDashboard, LogOut, Menu, X, Users } from 'lucide-react';
 
 export default function ClientLayout({
   children,
@@ -64,6 +64,7 @@ export default function ClientLayout({
   const menuItems = [
     { href: '/client/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { href: '/client/projects', label: 'My Projects', icon: Building2 },
+    { href: '/client/staffs', label: 'Staffs', icon: Users },
   ];
 
   return (

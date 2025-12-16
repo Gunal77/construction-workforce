@@ -49,7 +49,7 @@ router.get('/', async (req, res) => {
     const clientUserId = req.client.id;
 
     // Fetch only projects assigned to this client
-    const { data, error } = await supabase
+    const { data: projects, error } = await supabase
       .from('projects')
       .select('*')
       .eq('client_user_id', clientUserId)
@@ -60,9 +60,51 @@ router.get('/', async (req, res) => {
       return res.status(500).json({ message: error.message || 'Failed to fetch projects' });
     }
 
+    if (!projects || projects.length === 0) {
+      return res.json({ 
+        projects: [],
+        total: 0
+      });
+    }
+
+    // Enrich projects with staff counts and supervisor names
+    const enrichedProjects = await Promise.all(
+      projects.map(async (project) => {
+        // Get staff count for this project
+        const { count: staffCount } = await supabase
+          .from('employees')
+          .select('*', { count: 'exact', head: true })
+          .eq('project_id', project.id);
+
+        // Get assigned supervisor (one per project)
+        const { data: supervisorRelation } = await supabase
+          .from('supervisor_projects_relation')
+          .select('supervisor_id')
+          .eq('project_id', project.id)
+          .limit(1)
+          .maybeSingle();
+
+        let supervisorName = null;
+        if (supervisorRelation?.supervisor_id) {
+          const { data: supervisor } = await supabase
+            .from('supervisors')
+            .select('name')
+            .eq('id', supervisorRelation.supervisor_id)
+            .maybeSingle();
+          supervisorName = supervisor?.name || null;
+        }
+
+        return {
+          ...project,
+          staff_count: staffCount || 0,
+          supervisor_name: supervisorName,
+        };
+      })
+    );
+
     return res.json({ 
-      projects: data || [],
-      total: data?.length || 0
+      projects: enrichedProjects,
+      total: enrichedProjects.length
     });
   } catch (err) {
     console.error('Get client projects error', err);

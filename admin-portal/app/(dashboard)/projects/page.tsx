@@ -9,8 +9,9 @@ import Textarea from '@/components/Textarea';
 import ProjectCard from '@/components/ProjectCard';
 import SearchableSelect from '@/components/SearchableSelect';
 import Select from '@/components/Select';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, X } from 'lucide-react';
 import { getAllClients, ClientData } from '@/app/actions/clientActions';
+import ProjectDetailsModal from '@/components/ProjectDetailsModal';
 
 const ITEMS_PER_PAGE = 9;
 
@@ -29,6 +30,13 @@ export default function ProjectsPage() {
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [sortBy, setSortBy] = useState('name-asc');
+  const [dateRangeStart, setDateRangeStart] = useState('');
+  const [dateRangeEnd, setDateRangeEnd] = useState('');
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>('admin'); // Default to admin for admin portal
+  const [searchInput, setSearchInput] = useState('');
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [viewingProject, setViewingProject] = useState<Project | null>(null);
 
   // Form state for add/edit
   const [formData, setFormData] = useState({
@@ -46,9 +54,31 @@ export default function ProjectsPage() {
   const [loadingClients, setLoadingClients] = useState(false);
 
   useEffect(() => {
+    fetchUserRole();
     fetchProjects();
     fetchClients();
   }, []);
+
+  const fetchUserRole = async () => {
+    try {
+      const response = await fetch('/api/auth/me', { credentials: 'include' });
+      if (response.ok) {
+        const data = await response.json();
+        // Backend returns { success: true, data: { role: 'admin', ... } }
+        const role = data.data?.role || data.role || data.user?.role || 'admin'; // Default to admin for admin portal
+        console.log('User role fetched:', role, 'Full response:', data);
+        setUserRole(role?.toLowerCase() || 'admin'); // Normalize to lowercase
+      } else {
+        // If fetch fails, assume admin since we're in admin portal
+        console.warn('Failed to fetch user role, defaulting to admin');
+        setUserRole('admin');
+      }
+    } catch (error) {
+      console.error('Error fetching user role:', error);
+      // Default to admin for admin portal
+      setUserRole('admin');
+    }
+  };
 
   const fetchClients = async () => {
     try {
@@ -80,6 +110,12 @@ export default function ProjectsPage() {
     e.preventDefault();
     setError('');
 
+    // Validate client is required
+    if (!formData.client_user_id) {
+      setError('Client is required. Each project must be linked to a client.');
+      return;
+    }
+
     try {
       await projectsAPI.create({
         name: formData.name,
@@ -88,7 +124,7 @@ export default function ProjectsPage() {
         end_date: formData.end_date || undefined,
         description: formData.description || undefined,
         budget: formData.budget ? parseFloat(formData.budget) : undefined,
-        client_user_id: formData.client_user_id || undefined,
+        client_user_id: formData.client_user_id,
       });
       setIsAddModalOpen(false);
       setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
@@ -122,6 +158,22 @@ export default function ProjectsPage() {
     }
   };
 
+  const handleArchiveProject = async () => {
+    if (!selectedProject) return;
+
+    try {
+      // Archive by setting status to 'archived' instead of deleting
+      await projectsAPI.update(selectedProject.id, {
+        status: 'archived',
+      });
+      setIsArchiveModalOpen(false);
+      setSelectedProject(null);
+      fetchProjects();
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to archive project');
+    }
+  };
+
   const handleDeleteProject = async () => {
     if (!selectedProject) return;
 
@@ -150,7 +202,8 @@ export default function ProjectsPage() {
   };
 
   const handleViewProject = (project: Project) => {
-    router.push(`/projects/${project.id}`);
+    setViewingProject(project);
+    setIsDetailsModalOpen(true);
   };
 
   // Filter and sort projects
@@ -192,12 +245,43 @@ export default function ProjectsPage() {
       });
     }
 
+    // Apply date range filter
+    if (dateRangeStart) {
+      filtered = filtered.filter((project) => {
+        if (!project.start_date) return false;
+        return new Date(project.start_date) >= new Date(dateRangeStart);
+      });
+    }
+    if (dateRangeEnd) {
+      filtered = filtered.filter((project) => {
+        if (!project.end_date) return false;
+        return new Date(project.end_date) <= new Date(dateRangeEnd);
+      });
+    }
+
+    // Filter out archived projects
+    filtered = filtered.filter((project) => {
+      return (project as any).status !== 'archived';
+    });
+
     // Apply sorting
     const sorted = [...filtered].sort((a, b) => {
       if (sortBy === 'name-asc') {
         return (a.name || '').localeCompare(b.name || '');
       } else if (sortBy === 'name-desc') {
         return (b.name || '').localeCompare(a.name || '');
+      } else if (sortBy === 'end-date-asc') {
+        // Nearest first (ascending end date)
+        if (!a.end_date && !b.end_date) return 0;
+        if (!a.end_date) return 1;
+        if (!b.end_date) return -1;
+        return new Date(a.end_date).getTime() - new Date(b.end_date).getTime();
+      } else if (sortBy === 'end-date-desc') {
+        // Farthest first (descending end date)
+        if (!a.end_date && !b.end_date) return 0;
+        if (!a.end_date) return 1;
+        if (!b.end_date) return -1;
+        return new Date(b.end_date).getTime() - new Date(a.end_date).getTime();
       }
       return 0;
     });
@@ -230,13 +314,15 @@ export default function ProjectsPage() {
           <h1 className="text-2xl font-bold text-gray-800">Projects</h1>
           <p className="text-gray-600 mt-1">Manage your construction projects</p>
         </div>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center space-x-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
-        >
-          <Plus className="h-5 w-5" />
-          <span>New Project</span>
-        </button>
+        {userRole === 'admin' && (
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="flex items-center space-x-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
+          >
+            <Plus className="h-5 w-5" />
+            <span>New Project</span>
+          </button>
+        )}
       </div>
 
       {error && (
@@ -246,86 +332,155 @@ export default function ProjectsPage() {
       )}
 
       {/* Search and Filter Bar */}
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-        <div className="flex-1 w-full">
-          <div className="relative">
-            <Search className="absolute left-3.5 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none z-10" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+          <div className="flex-1 w-full flex gap-2">
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setSearchQuery(searchInput);
+                    setCurrentPage(1);
+                  }
+                }}
+                placeholder="Search by name, description, or location..."
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+              />
+              {searchInput && (
+                <button
+                  onClick={() => {
+                    setSearchInput('');
+                    setSearchQuery('');
+                    setCurrentPage(1);
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  title="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                setSearchQuery(searchInput);
                 setCurrentPage(1);
               }}
-              placeholder="Search by name, description, or location..."
-              className="w-full pl-12 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+              disabled={loading}
+              className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Search className="h-5 w-5" />
+              <span>Search</span>
+            </button>
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchInput('');
+                  setSearchQuery('');
+                  setCurrentPage(1);
+                }}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2 whitespace-nowrap"
+                title="Clear search and show all projects"
+              >
+                <X className="h-5 w-5" />
+                <span>Clear</span>
+              </button>
+            )}
+          </div>
+          <div className="w-full sm:w-auto min-w-[200px]">
+            <SearchableSelect
+              options={[
+                { value: '', label: 'All Clients' },
+                ...clients
+                  .filter((c) => c.is_active !== false)
+                  .map((client) => ({
+                    value: client.id,
+                    label: client.name,
+                  })),
+              ]}
+              value={clientFilter}
+              onChange={(value) => {
+                setClientFilter(value);
+                setCurrentPage(1);
+              }}
+              placeholder="Filter by client"
+              searchPlaceholder="Search clients..."
             />
           </div>
+          <div className="w-full sm:w-auto min-w-[150px]">
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="on_hold">On Hold</option>
+            </select>
+          </div>
+          <div className="w-full sm:w-auto min-w-[150px]">
+            <select
+              value={sortBy}
+              onChange={(e) => {
+                setSortBy(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+            >
+              <option value="name-asc">Name (A-Z)</option>
+              <option value="name-desc">Name (Z-A)</option>
+              <option value="end-date-asc">End Date (Nearest First)</option>
+              <option value="end-date-desc">End Date (Farthest First)</option>
+            </select>
+          </div>
         </div>
-        <div className="w-full sm:w-auto min-w-[200px]">
-          <SearchableSelect
-            options={[
-              { value: '', label: 'All Projects' },
-              ...projects.map((project) => ({
-                value: project.id,
-                label: project.name,
-              })),
-            ]}
-            value={selectedProjectFilter}
-            onChange={(value) => {
-              setSelectedProjectFilter(value);
-              setCurrentPage(1);
-            }}
-            placeholder="Filter by project"
-            searchPlaceholder="Search projects..."
-          />
-        </div>
-        <div className="w-full sm:w-auto min-w-[150px]">
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="completed">Completed</option>
-          </select>
-        </div>
-        <div className="w-full sm:w-auto min-w-[200px]">
-          <SearchableSelect
-            options={[
-              { value: '', label: 'All Clients' },
-              ...clients
-                .filter((c) => c.is_active !== false)
-                .map((client) => ({
-                  value: client.id,
-                  label: client.name,
-                })),
-            ]}
-            value={clientFilter}
-            onChange={(value) => {
-              setClientFilter(value);
-              setCurrentPage(1);
-            }}
-            placeholder="Filter by client"
-            searchPlaceholder="Search clients..."
-          />
-        </div>
-        <div className="w-full sm:w-auto min-w-[150px]">
-          <select
-            value={sortBy}
-            onChange={(e) => {
-              setSortBy(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-          >
-            <option value="name-asc">Name (A-Z)</option>
-            <option value="name-desc">Name (Z-A)</option>
-          </select>
+
+        {/* Date Range Filters */}
+        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+          <div className="w-full sm:w-auto">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Start Date From</label>
+            <input
+              type="date"
+              value={dateRangeStart}
+              onChange={(e) => {
+                setDateRangeStart(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full sm:w-auto px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+            />
+          </div>
+          <div className="w-full sm:w-auto">
+            <label className="block text-sm font-medium text-gray-700 mb-1">End Date To</label>
+            <input
+              type="date"
+              value={dateRangeEnd}
+              onChange={(e) => {
+                setDateRangeEnd(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full sm:w-auto px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+            />
+          </div>
+          {(dateRangeStart || dateRangeEnd) && (
+            <div className="w-full sm:w-auto flex items-end">
+              <button
+                onClick={() => {
+                  setDateRangeStart('');
+                  setDateRangeEnd('');
+                  setCurrentPage(1);
+                }}
+                className="px-4 py-2.5 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Clear Dates
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -351,7 +506,17 @@ export default function ProjectsPage() {
                 key={project.id}
                 project={project}
                 onClick={() => handleViewProject(project)}
-                clientName={client?.name}
+                clientName={client?.name || project.client_name}
+                onEdit={() => openEditModal(project)}
+                onArchive={() => {
+                  setSelectedProject(project);
+                  setIsArchiveModalOpen(true);
+                }}
+                onDelete={() => {
+                  setSelectedProject(project);
+                  setIsDeleteModalOpen(true);
+                }}
+                isAdmin={userRole === 'admin'}
               />
             );
           })}
@@ -605,7 +770,44 @@ export default function ProjectsPage() {
         </form>
       </Modal>
 
-      {/* Delete Confirmation Modal */}
+      {/* Archive Confirmation Modal */}
+      <Modal
+        isOpen={isArchiveModalOpen}
+        onClose={() => {
+          setIsArchiveModalOpen(false);
+          setSelectedProject(null);
+        }}
+        title="Archive Project"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-700">
+            Are you sure you want to archive{' '}
+            <span className="font-semibold">{selectedProject?.name}</span>? Archived projects will be hidden from the main list.
+          </p>
+          <div className="flex justify-end space-x-3 pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setIsArchiveModalOpen(false);
+                setSelectedProject(null);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleArchiveProject}
+              className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+            >
+              Archive
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Confirmation Modal (Keep for emergency use) */}
       <Modal
         isOpen={isDeleteModalOpen}
         onClose={() => {
@@ -617,7 +819,7 @@ export default function ProjectsPage() {
       >
         <div className="space-y-4">
           <p className="text-gray-700">
-            Are you sure you want to delete{' '}
+            Are you sure you want to permanently delete{' '}
             <span className="font-semibold">{selectedProject?.name}</span>? This
             action cannot be undone.
           </p>
@@ -642,6 +844,21 @@ export default function ProjectsPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Project Details Modal */}
+      <ProjectDetailsModal
+        isOpen={isDetailsModalOpen}
+        onClose={() => {
+          setIsDetailsModalOpen(false);
+          setViewingProject(null);
+        }}
+        project={viewingProject}
+        clientName={viewingProject ? (clients.find((c) => c.id === (viewingProject as any).client_user_id)?.name || viewingProject.client_name) : undefined}
+        isAdmin={userRole === 'admin'}
+        onUpdate={() => {
+          fetchProjects();
+        }}
+      />
     </div>
   );
 }
