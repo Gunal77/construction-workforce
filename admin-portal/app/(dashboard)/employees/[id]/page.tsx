@@ -2,9 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { employeesAPI, attendanceAPI, Employee, AttendanceRecord } from '@/lib/api';
+import { employeesAPI, attendanceAPI, leaveAPI, Employee, AttendanceRecord } from '@/lib/api';
 import Card from '@/components/Card';
 import Table from '@/components/Table';
+import LeaveBalanceCard from '@/components/LeaveBalanceCard';
+import LeaveRequestForm from '@/components/LeaveRequestForm';
 import {
   BarChart,
   Bar,
@@ -15,7 +17,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { ArrowLeft, Mail, Phone, Briefcase, Calendar } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, Briefcase, Calendar, Plus } from 'lucide-react';
 
 export default function EmployeeDetailsPage() {
   const params = useParams();
@@ -24,15 +26,28 @@ export default function EmployeeDetailsPage() {
 
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [leaveBalance, setLeaveBalance] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [showLeaveRequestForm, setShowLeaveRequestForm] = useState(false);
 
   useEffect(() => {
     if (employeeId) {
       fetchEmployeeDetails();
       fetchAttendanceHistory();
+      fetchLeaveBalance();
     }
   }, [employeeId]);
+
+  const fetchLeaveBalance = async () => {
+    try {
+      const currentYear = new Date().getFullYear();
+      const response = await leaveAPI.getBalance(employeeId, currentYear);
+      setLeaveBalance(response.balances || []);
+    } catch (err) {
+      console.error('Error fetching leave balance:', err);
+    }
+  };
 
   const fetchEmployeeDetails = async () => {
     try {
@@ -191,6 +206,23 @@ export default function EmployeeDetailsPage() {
         </div>
       </div>
 
+      {/* Leave Balance Section */}
+      {leaveBalance.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-800">Leave Balance</h2>
+            <button
+              onClick={() => setShowLeaveRequestForm(true)}
+              className="flex items-center space-x-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Request Leave</span>
+            </button>
+          </div>
+          <LeaveBalanceCard balances={leaveBalance} />
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card title="Employee Information">
           <div className="space-y-4">
@@ -271,6 +303,20 @@ export default function EmployeeDetailsPage() {
           </div>
         </Card>
       </div>
+
+      {/* Leave Request Form */}
+      {showLeaveRequestForm && employee && (
+        <LeaveRequestForm
+          isOpen={showLeaveRequestForm}
+          onClose={() => setShowLeaveRequestForm(false)}
+          employeeId={employee.id}
+          employeeName={employee.name}
+          onSuccess={() => {
+            fetchLeaveBalance();
+            setShowLeaveRequestForm(false);
+          }}
+        />
+      )}
 
       {chartData.length > 0 && (
         <Card title="Check-ins per Month">

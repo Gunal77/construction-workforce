@@ -33,6 +33,7 @@ router.post(
 router.post('/check-out', authMiddleware, attendanceController.checkOut);
 router.get('/me', authMiddleware, attendanceController.getMyAttendance);
 router.get('/admin/all', adminAuthMiddleware, attendanceController.getAllAttendance);
+router.get('/admin/last-end-dates', adminAuthMiddleware, attendanceController.getLastEndDates);
 
 module.exports = router;
 

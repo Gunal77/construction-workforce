@@ -6,8 +6,9 @@ import PoorPerformers from '@/components/PoorPerformers';
 import RecentCheckIns from '@/components/RecentCheckIns';
 import RecentCheckOuts from '@/components/RecentCheckOuts';
 import ActiveProjects from '@/components/ActiveProjects';
-import { Users, UserCheck, UserX, Clock, UserCog, FolderCheck } from 'lucide-react';
+import { Users, UserCheck, UserX, Clock, UserCog, FolderCheck, Calendar, Timer, AlertCircle } from 'lucide-react';
 import { AttendanceRecord, Employee, Project } from '@/lib/api';
+import PendingLeaveRequestsBanner from '@/components/PendingLeaveRequestsBanner';
 
 async function getDashboardData() {
   try {
@@ -16,6 +17,56 @@ async function getDashboardData() {
       serverAPI.attendance.getAll({ sortBy: 'check_in_time', sortOrder: 'desc' }),
       serverAPI.projects.getAll(),
     ]);
+
+    // Fetch leave statistics for pending requests count
+    let pendingLeaveRequests = 0;
+    try {
+      const cookieStore = await import('next/headers').then(m => m.cookies());
+      const token = cookieStore.get('auth_token')?.value;
+      if (token) {
+        const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+        const leaveStatsRes = await fetch(`${apiUrl}/api/leave/admin/statistics`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (leaveStatsRes.ok) {
+          const leaveStats = await leaveStatsRes.json();
+          pendingLeaveRequests = leaveStats.pendingCount || 0;
+        }
+      }
+    } catch (err) {
+      // Silently fail if leave API is not available
+      console.error('Error fetching leave stats:', err);
+    }
+
+    // Fetch timesheet statistics
+    let todayTotalOT = 0;
+    let pendingTimesheetApprovals = 0;
+    let pendingOTApprovals = 0;
+    try {
+      const cookieStore = await import('next/headers').then(m => m.cookies());
+      const token = cookieStore.get('auth_token')?.value;
+      if (token) {
+        const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+        const timesheetStatsRes = await fetch(`${apiUrl}/api/timesheets/stats`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (timesheetStatsRes.ok) {
+          const timesheetStats = await timesheetStatsRes.json();
+          todayTotalOT = timesheetStats.todayTotalOT || 0;
+          pendingTimesheetApprovals = timesheetStats.pendingTimesheetApprovals || 0;
+          pendingOTApprovals = timesheetStats.pendingOTApprovals || 0;
+        }
+      }
+    } catch (err) {
+      // Silently fail if timesheet API is not available
+      console.error('Error fetching timesheet stats:', err);
+    }
 
     const employees = employeesRes.employees || [];
     const attendanceRecords = attendanceRes.records || [];
@@ -56,6 +107,10 @@ async function getDashboardData() {
       absentToday,
       completedProjects,
       onHoldProjects,
+      pendingLeaveRequests,
+      todayTotalOT,
+      pendingTimesheetApprovals,
+      pendingOTApprovals,
       recentActivity,
       employees,
       attendanceRecords,
@@ -70,6 +125,10 @@ async function getDashboardData() {
       absentToday: 0,
       completedProjects: 0,
       onHoldProjects: 0,
+      pendingLeaveRequests: 0,
+      todayTotalOT: 0,
+      pendingTimesheetApprovals: 0,
+      pendingOTApprovals: 0,
       recentActivity: [],
       employees: [],
       attendanceRecords: [],
@@ -80,17 +139,21 @@ async function getDashboardData() {
 
 export default async function DashboardPage() {
   const {
-    totalWorkers,
-    supervisors,
-    presentToday,
-    absentToday,
-    completedProjects,
-    onHoldProjects,
-    recentActivity,
-    employees,
-    attendanceRecords,
-    projects,
-  } = await getDashboardData();
+      totalWorkers,
+      supervisors,
+      presentToday,
+      absentToday,
+      completedProjects,
+      onHoldProjects,
+      pendingLeaveRequests,
+      todayTotalOT,
+      pendingTimesheetApprovals,
+      pendingOTApprovals,
+      recentActivity,
+      employees,
+      attendanceRecords,
+      projects,
+    } = await getDashboardData();
 
   return (
     <div className="space-y-6">
@@ -122,6 +185,31 @@ export default async function DashboardPage() {
           icon={<FolderCheck className="h-6 w-6 text-orange-600" />}
         />
       </div>
+
+      {/* Timesheet & OT Statistics */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <StatCard
+          title="Today's Total OT Hours"
+          value={todayTotalOT.toFixed(2)}
+          subtitle="Approved overtime hours"
+          icon={<Timer className="h-6 w-6 text-yellow-600" />}
+        />
+        <StatCard
+          title="Pending Timesheet Approvals"
+          value={pendingTimesheetApprovals}
+          subtitle="Awaiting approval"
+          icon={<AlertCircle className="h-6 w-6 text-orange-600" />}
+        />
+        <StatCard
+          title="Pending OT Approvals"
+          value={pendingOTApprovals}
+          subtitle="Overtime requests"
+          icon={<Clock className="h-6 w-6 text-red-600" />}
+        />
+      </div>
+
+      {/* Pending Leave Requests Banner - Clickable */}
+      <PendingLeaveRequestsBanner count={pendingLeaveRequests} />
 
       <PoorPerformers workers={employees} attendanceRecords={attendanceRecords} />
 

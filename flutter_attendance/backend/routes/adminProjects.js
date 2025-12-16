@@ -112,7 +112,7 @@ router.get('/:id', async (req, res) => {
 // POST /admin/projects - Add new project
 router.post('/', async (req, res) => {
   try {
-    const { name, location, start_date, end_date, description, budget } = req.body;
+    const { name, location, start_date, end_date, description, budget, client_user_id } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ message: 'Project name is required' });
@@ -125,6 +125,7 @@ router.post('/', async (req, res) => {
       end_date: end_date || null,
       description: description?.trim() || null,
       budget: budget != null ? (typeof budget === 'string' ? parseFloat(budget) : budget) : null,
+      client_user_id: client_user_id || null,
     };
 
     const { data, error } = await supabase
@@ -148,7 +149,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, location, start_date, end_date, description, budget } = req.body;
+    const { name, location, start_date, end_date, description, budget, client_user_id } = req.body;
 
     if (!id) {
       return res.status(400).json({ message: 'Project ID is required' });
@@ -175,6 +176,9 @@ router.put('/:id', async (req, res) => {
     }
     if (budget !== undefined) {
       updateData.budget = budget != null ? (typeof budget === 'string' ? parseFloat(budget) : budget) : null;
+    }
+    if (client_user_id !== undefined) {
+      updateData.client_user_id = client_user_id || null;
     }
 
     if (Object.keys(updateData).length === 0) {

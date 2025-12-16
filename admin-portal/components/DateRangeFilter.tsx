@@ -137,22 +137,39 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
     }
   }, [compareEnabled, compareType, fromDate, toDate]);
 
-  const handleApply = () => {
-    if (fromDate && toDate) {
-      const range: DateRange = { from: fromDate, to: toDate };
-      const compareRange: CompareDateRange | undefined = compareEnabled && compareFromDate && compareToDate
-        ? {
-            enabled: true,
-            type: compareType,
-            from: compareFromDate,
-            to: compareToDate,
-          }
-        : undefined;
-      onDateRangeChange(range, compareRange);
-      setHasChanges(false);
-      setShowCalendar(false);
-      setShowCompareCalendar(false);
+  const handleApply = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
     }
+    
+    const finalFromDate = fromDate || (() => {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), 1);
+    })();
+    const finalToDate = toDate || new Date();
+    
+    const actualFrom = finalFromDate <= finalToDate ? finalFromDate : finalToDate;
+    const actualTo = finalToDate >= finalFromDate ? finalToDate : finalFromDate;
+    
+    const range: DateRange = { from: actualFrom, to: actualTo };
+    const compareRange: CompareDateRange | undefined = compareEnabled && compareFromDate && compareToDate
+      ? {
+          enabled: true,
+          type: compareType,
+          from: compareFromDate,
+          to: compareToDate,
+        }
+      : undefined;
+    
+    // Use setTimeout to prevent page reload and allow smooth transition
+    setTimeout(() => {
+      onDateRangeChange(range, compareRange);
+    }, 0);
+    
+    setHasChanges(false);
+    setShowCalendar(false);
+    setShowCompareCalendar(false);
   };
 
   const handleCancel = () => {
@@ -226,11 +243,16 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
     return dateTime >= fromTime && dateTime <= toTime;
   };
 
-  const isDateSelected = (date: Date, from: Date | null, to: Date | null) => {
-    if (!from || !to) return false;
-    const dateTime = date.getTime();
-    return dateTime === from.getTime() || dateTime === to.getTime();
-  };
+      const isDateSelected = (date: Date, from: Date | null, to: Date | null) => {
+        if (!from || !to) return false;
+        const dateTime = date.getTime();
+        return dateTime === from.getTime() || dateTime === to.getTime();
+      };
+
+      const isEndDate = (date: Date, from: Date | null, to: Date | null) => {
+        if (!to) return false;
+        return date.getTime() === to.getTime();
+      };
 
   const handleDateClick = (date: Date) => {
     if (showCalendar) {
@@ -277,6 +299,7 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
       const date = new Date(month.getFullYear(), month.getMonth(), day);
       const isInRange = isDateInRange(date, from, to);
       const isSelected = isDateSelected(date, from, to);
+      const isEnd = isEndDate(date, from, to);
       const isToday = date.toDateString() === new Date().toDateString();
 
       days.push(
@@ -285,7 +308,11 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
           onClick={() => handleDateClick(date)}
           className={`
             w-8 h-8 sm:w-10 sm:h-10 rounded-lg text-xs sm:text-sm font-medium transition-colors relative
-            ${isSelected
+            ${isEnd
+              ? isCompare
+                ? 'bg-orange-600 text-white ring-4 ring-orange-400 font-bold shadow-lg'
+                : 'bg-primary-600 text-white ring-4 ring-primary-400 font-bold shadow-lg'
+              : isSelected
               ? isCompare
                 ? 'bg-orange-600 text-white ring-2 ring-orange-300'
                 : 'bg-blue-600 text-white ring-2 ring-blue-300'
@@ -294,7 +321,7 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
                 ? 'bg-orange-100 text-orange-700 hover:bg-orange-200'
                 : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
               : 'hover:bg-gray-100 text-gray-700'}
-            ${isToday ? 'ring-2 ring-primary-400' : ''}
+            ${isToday && !isEnd ? 'ring-2 ring-primary-400' : ''}
           `}
         >
           {day}
@@ -363,8 +390,8 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 md:p-6 w-full max-w-full overflow-hidden">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-8">
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 md:p-6 w-full max-w-full overflow-x-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-8 min-w-0">
         {/* Main Date Range Section */}
         <div className="space-y-4">
           <div>
@@ -428,13 +455,16 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">To</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                <span className="text-primary-600 font-semibold">To</span>
+                <span className="ml-1 text-xs text-primary-500">(End Date)</span>
+              </label>
               <div className="relative">
                 <input
                   type="date"
                   value={formatDateInput(toDate)}
                   onChange={(e) => handleDateInputChange('to', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  className="w-full px-4 py-2.5 border-2 border-primary-500 bg-primary-50 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-600 font-medium text-primary-900"
                 />
                 <button
                   type="button"
@@ -449,7 +479,7 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
                       setCurrentMonth2(nextMonth);
                     }
                   }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-primary-600 hover:text-primary-700"
                 >
                   <Calendar className="h-5 w-5" />
                 </button>
@@ -460,7 +490,7 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
           {/* Calendar View */}
           {showCalendar && (
             <div className="border border-gray-200 rounded-lg p-2 md:p-4 bg-white shadow-lg z-50 mt-4 relative w-full max-w-full overflow-x-auto">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-[600px] sm:min-w-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-0">
                 {/* First Calendar */}
                 <div>
                   <div className="flex items-center justify-between mb-4">
@@ -589,13 +619,16 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">To</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <span className="text-orange-600 font-semibold">To</span>
+                      <span className="ml-1 text-xs text-orange-500">(End Date)</span>
+                    </label>
                     <div className="relative">
                       <input
                         type="date"
                         value={formatDateInput(compareToDate)}
                         onChange={(e) => handleCompareDateInputChange('to', e.target.value)}
-                        className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                        className="w-full px-4 py-2.5 border-2 border-orange-500 bg-orange-50 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-600 font-medium text-orange-900"
                       />
                       <button
                         type="button"
@@ -610,7 +643,7 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
                             setCompareCurrentMonth2(nextMonth);
                           }
                         }}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-orange-600 hover:text-orange-700"
                       >
                         <Calendar className="h-5 w-5" />
                       </button>
@@ -692,13 +725,23 @@ export default function DateRangeFilter({ onDateRangeChange }: DateRangeFilterPr
         </p>
         <div className="flex flex-col sm:flex-row justify-end gap-2 sm:gap-3 sm:space-x-0">
           <button
-            onClick={handleCancel}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleCancel();
+            }}
             className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Cancel
           </button>
           <button
-            onClick={handleApply}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleApply(e);
+            }}
             disabled={!fromDate || !toDate || (compareEnabled && (!compareFromDate || !compareToDate))}
             className="w-full sm:w-auto px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >

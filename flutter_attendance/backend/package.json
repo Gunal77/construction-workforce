@@ -10,7 +10,12 @@
     "seed:priority": "node scripts/seed_attendance_priority.js",
     "seed:priority:sql": "node scripts/run_sql_seed.js",
     "seed:good-medium": "node scripts/run_good_medium_seed.js",
-    "seed:all": "node scripts/seed_all_data.js"
+    "seed:leave": "node scripts/run_leave_seed.js",
+    "seed:timesheets": "node scripts/run_timesheet_seed.js",
+    "seed:reports": "node scripts/run_reports_seed.js",
+    "seed:all": "node scripts/seed_all_data.js",
+    "import:jtc": "node scripts/import_jtc_data.js",
+    "import:jtc:dry-run": "node scripts/import_jtc_data.js --dry-run"
   },
   "keywords": [],
   "author": "",

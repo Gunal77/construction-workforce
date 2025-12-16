@@ -213,10 +213,68 @@ const getAllAttendance = async (req, res) => {
   }
 };
 
+const getLastEndDates = async (req, res) => {
+  try {
+    const { employeeIds, inactiveDays } = req.query;
+    
+    let query = `
+      SELECT 
+        e.id AS employee_id,
+        e.name AS employee_name,
+        e.email AS employee_email,
+        MAX(al.check_out_time) AS last_end_date
+      FROM employees e
+      LEFT JOIN users u ON u.email = e.email
+      LEFT JOIN attendance_logs al ON al.user_id = u.id AND al.check_out_time IS NOT NULL
+    `;
+    
+    const conditions = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (employeeIds) {
+      const ids = Array.isArray(employeeIds) ? employeeIds : employeeIds.split(',');
+      conditions.push(`e.id = ANY($${paramIndex})`);
+      values.push(ids);
+      paramIndex += 1;
+    }
+    
+    if (inactiveDays) {
+      const days = parseInt(inactiveDays, 10);
+      if (!isNaN(days)) {
+        conditions.push(`(MAX(al.check_out_time) IS NULL OR MAX(al.check_out_time) < CURRENT_DATE - INTERVAL '${days} days')`);
+      }
+    }
+    
+    query += ` GROUP BY e.id, e.name, e.email`;
+    
+    if (conditions.length > 0) {
+      // For inactiveDays filter, we need HAVING clause
+      if (inactiveDays) {
+        query += ` HAVING (MAX(al.check_out_time) IS NULL OR MAX(al.check_out_time) < CURRENT_DATE - INTERVAL '${inactiveDays} days')`;
+      }
+      // For employeeIds, we need WHERE clause
+      if (employeeIds) {
+        query = query.replace('GROUP BY', `WHERE ${conditions[0]} GROUP BY`);
+      }
+    }
+    
+    query += ` ORDER BY last_end_date DESC NULLS LAST`;
+    
+    const { rows } = await db.query(query, values);
+    
+    return res.json({ lastEndDates: rows });
+  } catch (error) {
+    console.error('Get last end dates error', error);
+    return res.status(500).json({ message: 'Failed to fetch last end dates' });
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
   getMyAttendance,
   getAllAttendance,
+  getLastEndDates,
 };
 

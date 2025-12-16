@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { projectsAPI, employeesAPI, Project, Employee } from '@/lib/api';
 import Card from '@/components/Card';
-import { ArrowLeft, MapPin, Calendar, DollarSign, Users, UserCog } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, DollarSign, Users, UserCog, Building2 } from 'lucide-react';
+import { getClientById, ClientData } from '@/app/actions/clientActions';
 
 export default function ProjectDetailsPage() {
   const params = useParams();
@@ -14,6 +15,7 @@ export default function ProjectDetailsPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [assignedWorkers, setAssignedWorkers] = useState<Employee[]>([]);
   const [assignedSupervisors, setAssignedSupervisors] = useState<any[]>([]);
+  const [client, setClient] = useState<ClientData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -23,6 +25,12 @@ export default function ProjectDetailsPage() {
       fetchAssignedWorkers();
     }
   }, [projectId]);
+
+  useEffect(() => {
+    if (project && (project as any).client_user_id) {
+      fetchClientDetails((project as any).client_user_id);
+    }
+  }, [project]);
 
   const fetchProjectDetails = async () => {
     try {
@@ -78,6 +86,17 @@ export default function ProjectDetailsPage() {
       setAssignedWorkers(workers);
     } catch (err: any) {
       console.error('Error fetching assigned workers:', err);
+    }
+  };
+
+  const fetchClientDetails = async (clientId: string) => {
+    try {
+      const response = await getClientById(clientId);
+      if (response.success && response.data) {
+        setClient(response.data);
+      }
+    } catch (err: any) {
+      console.error('Error fetching client details:', err);
     }
   };
 
@@ -164,11 +183,20 @@ export default function ProjectDetailsPage() {
         {/* Project Details */}
         <Card title="Project Information">
           <div className="space-y-4">
+            {client && (
+              <div className="flex items-start space-x-3">
+                <Building2 className="h-5 w-5 text-gray-400 mt-0.5" />
+                <div>
+                  <p className="text-sm text-gray-600">Client</p>
+                  <p className="text-gray-900 font-medium">{client.name}</p>
+                </div>
+              </div>
+            )}
             {project.start_date && (
               <div className="flex items-start space-x-3">
                 <Calendar className="h-5 w-5 text-gray-400 mt-0.5" />
                 <div>
-                  <p className="text-sm text-gray-600">Date</p>
+                  <p className="text-sm text-gray-600">Start Date</p>
                   <p className="text-gray-900 font-medium">
                     {new Date(project.start_date).toLocaleDateString('en-US', {
                       month: 'long',

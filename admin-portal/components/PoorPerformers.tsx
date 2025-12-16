@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { Employee, AttendanceRecord } from '@/lib/api';
+import { useState, useMemo, useEffect } from 'react';
+import { Employee, AttendanceRecord, lastEndDateAPI } from '@/lib/api';
 import { AlertTriangle } from 'lucide-react';
 import Pagination from './Pagination';
+import LastEndDateBadge from './LastEndDateBadge';
 
 interface PoorPerformer {
   worker: Employee;
@@ -21,7 +22,26 @@ const ITEMS_PER_PAGE = 5;
 
 export default function PoorPerformers({ workers, attendanceRecords }: PoorPerformersProps) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [lastEndDates, setLastEndDates] = useState<Record<string, string | null>>({});
   const today = new Date().toISOString().split('T')[0];
+  
+  useEffect(() => {
+    const fetchLastEndDates = async () => {
+      try {
+        if (workers.length === 0) return;
+        const employeeIds = workers.map(w => w.id);
+        const response = await lastEndDateAPI.getAll({ employeeIds });
+        const datesMap: Record<string, string | null> = {};
+        (response.lastEndDates || []).forEach((item: any) => {
+          datesMap[item.employee_id] = item.last_end_date;
+        });
+        setLastEndDates(datesMap);
+      } catch (err) {
+        console.error('Error fetching last end dates:', err);
+      }
+    };
+    fetchLastEndDates();
+  }, [workers]);
   const todayStart = new Date(today + 'T00:00:00');
   const todayEnd = new Date(today + 'T23:59:59');
   
@@ -224,9 +244,14 @@ export default function PoorPerformers({ workers, attendanceRecords }: PoorPerfo
                   <p className="text-sm font-medium text-gray-700">
                     Attendance: {performer.attendance}%
                   </p>
+                  <div className="mt-2">
+                    <span className="text-xs text-gray-500 mr-2">Last End Date:</span>
+                    <LastEndDateBadge lastEndDate={lastEndDates[performer.worker.id]} />
+                  </div>
                 </div>
               </div>
-              <span
+              <div className="flex flex-col items-end space-y-2">
+                <span
                 className={`px-3 py-1 text-xs font-semibold rounded-full ${
                   performer.priority === 'HIGH'
                     ? 'bg-red-200 text-red-800'
@@ -234,9 +259,10 @@ export default function PoorPerformers({ workers, attendanceRecords }: PoorPerfo
                     ? 'bg-yellow-200 text-yellow-800'
                     : 'bg-green-200 text-green-800'
                 }`}
-              >
-                {performer.priority}
-              </span>
+                >
+                  {performer.priority}
+                </span>
+              </div>
             </div>
           </div>
         ))}

@@ -1,14 +1,15 @@
 'use client';
 
 import { Project } from '@/lib/api';
-import { MapPin, Calendar, DollarSign } from 'lucide-react';
+import { MapPin, Calendar, DollarSign, Building2 } from 'lucide-react';
 
 interface ProjectCardProps {
   project: Project;
   onClick?: () => void;
+  clientName?: string;
 }
 
-export default function ProjectCard({ project, onClick }: ProjectCardProps) {
+export default function ProjectCard({ project, onClick, clientName }: ProjectCardProps) {
   // Determine status
   const isCompleted = project.end_date && new Date(project.end_date) <= new Date();
   const status = isCompleted ? 'completed' : 'active';
@@ -53,6 +54,12 @@ export default function ProjectCard({ project, onClick }: ProjectCardProps) {
       )}
 
       <div className="space-y-2">
+        {clientName && (
+          <div className="flex items-start space-x-2 text-sm text-gray-600">
+            <Building2 className="h-4 w-4 text-gray-400 mt-0.5 flex-shrink-0" />
+            <span className="font-medium text-gray-700">Client: {clientName}</span>
+          </div>
+        )}
         {project.location && (
           <div className="flex items-start space-x-2 text-sm text-gray-600">
             <MapPin className="h-4 w-4 text-gray-400 mt-0.5 flex-shrink-0" />

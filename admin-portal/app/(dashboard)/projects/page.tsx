@@ -8,7 +8,9 @@ import Input from '@/components/Input';
 import Textarea from '@/components/Textarea';
 import ProjectCard from '@/components/ProjectCard';
 import SearchableSelect from '@/components/SearchableSelect';
+import Select from '@/components/Select';
 import { Plus, Search } from 'lucide-react';
+import { getAllClients, ClientData } from '@/app/actions/clientActions';
 
 const ITEMS_PER_PAGE = 9;
 
@@ -25,6 +27,7 @@ export default function ProjectsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
   const [sortBy, setSortBy] = useState('name-asc');
 
   // Form state for add/edit
@@ -35,11 +38,31 @@ export default function ProjectsPage() {
     end_date: '',
     description: '',
     budget: '',
+    client_user_id: '',
   });
+
+  // Clients for dropdown
+  const [clients, setClients] = useState<ClientData[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
 
   useEffect(() => {
     fetchProjects();
+    fetchClients();
   }, []);
+
+  const fetchClients = async () => {
+    try {
+      setLoadingClients(true);
+      const response = await getAllClients();
+      if (response.success) {
+        setClients(response.data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching clients:', error);
+    } finally {
+      setLoadingClients(false);
+    }
+  };
 
   const fetchProjects = async () => {
     try {
@@ -65,9 +88,10 @@ export default function ProjectsPage() {
         end_date: formData.end_date || undefined,
         description: formData.description || undefined,
         budget: formData.budget ? parseFloat(formData.budget) : undefined,
+        client_user_id: formData.client_user_id || undefined,
       });
       setIsAddModalOpen(false);
-      setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '' });
+      setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
       fetchProjects();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to create project');
@@ -87,10 +111,11 @@ export default function ProjectsPage() {
         end_date: formData.end_date || undefined,
         description: formData.description || undefined,
         budget: formData.budget ? parseFloat(formData.budget) : undefined,
+        client_user_id: formData.client_user_id || undefined,
       });
       setIsEditModalOpen(false);
       setSelectedProject(null);
-      setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '' });
+      setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
       fetchProjects();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to update project');
@@ -119,6 +144,7 @@ export default function ProjectsPage() {
       end_date: project.end_date ? project.end_date.split('T')[0] : '',
       description: (project as any).description || '',
       budget: (project as any).budget ? String((project as any).budget) : '',
+      client_user_id: (project as any).client_user_id || '',
     });
     setIsEditModalOpen(true);
   };
@@ -159,6 +185,13 @@ export default function ProjectsPage() {
       });
     }
 
+    // Apply client filter
+    if (clientFilter) {
+      filtered = filtered.filter((project) => {
+        return (project as any).client_user_id === clientFilter;
+      });
+    }
+
     // Apply sorting
     const sorted = [...filtered].sort((a, b) => {
       if (sortBy === 'name-asc') {
@@ -170,7 +203,7 @@ export default function ProjectsPage() {
     });
 
     return sorted;
-  }, [projects, searchQuery, statusFilter, selectedProjectFilter, sortBy]);
+  }, [projects, searchQuery, statusFilter, selectedProjectFilter, clientFilter, sortBy]);
 
   // Paginate
   const paginatedProjects = filteredAndSortedProjects.slice(
@@ -261,6 +294,26 @@ export default function ProjectsPage() {
             <option value="completed">Completed</option>
           </select>
         </div>
+        <div className="w-full sm:w-auto min-w-[200px]">
+          <SearchableSelect
+            options={[
+              { value: '', label: 'All Clients' },
+              ...clients
+                .filter((c) => c.is_active !== false)
+                .map((client) => ({
+                  value: client.id,
+                  label: client.name,
+                })),
+            ]}
+            value={clientFilter}
+            onChange={(value) => {
+              setClientFilter(value);
+              setCurrentPage(1);
+            }}
+            placeholder="Filter by client"
+            searchPlaceholder="Search clients..."
+          />
+        </div>
         <div className="w-full sm:w-auto min-w-[150px]">
           <select
             value={sortBy}
@@ -290,13 +343,18 @@ export default function ProjectsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {paginatedProjects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onClick={() => handleViewProject(project)}
-            />
-          ))}
+          {paginatedProjects.map((project) => {
+            const clientId = (project as any).client_user_id;
+            const client = clients.find((c) => c.id === clientId);
+            return (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onClick={() => handleViewProject(project)}
+                clientName={client?.name}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -328,7 +386,7 @@ export default function ProjectsPage() {
         isOpen={isAddModalOpen}
         onClose={() => {
           setIsAddModalOpen(false);
-          setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '' });
+          setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
           setError('');
         }}
         title="Add New Project"
@@ -349,6 +407,28 @@ export default function ProjectsPage() {
             required
             placeholder="Enter project name"
           />
+
+          <div>
+            <SearchableSelect
+              label="Client"
+              value={formData.client_user_id}
+              onChange={(value) => setFormData({ ...formData, client_user_id: value })}
+              placeholder="Select a client..."
+              searchPlaceholder="Search clients..."
+              options={loadingClients ? [] : clients
+                .filter((c) => c.is_active !== false)
+                .map((client) => ({
+                  value: client.id,
+                  label: client.name,
+                }))}
+            />
+            {loadingClients && (
+              <p className="text-sm text-gray-500 mt-1">Loading clients...</p>
+            )}
+            {!formData.client_user_id && (
+              <p className="text-sm text-red-500 mt-1">Client is required</p>
+            )}
+          </div>
 
           <Textarea
             label="Description"
@@ -395,7 +475,7 @@ export default function ProjectsPage() {
               type="button"
               onClick={() => {
                 setIsAddModalOpen(false);
-                setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '' });
+                setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
                 setError('');
               }}
               className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
@@ -418,7 +498,7 @@ export default function ProjectsPage() {
         onClose={() => {
           setIsEditModalOpen(false);
           setSelectedProject(null);
-          setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '' });
+          setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
           setError('');
         }}
         title="Edit Project"
@@ -439,6 +519,28 @@ export default function ProjectsPage() {
             required
             placeholder="Enter project name"
           />
+
+          <div>
+            <SearchableSelect
+              label="Client"
+              value={formData.client_user_id}
+              onChange={(value) => setFormData({ ...formData, client_user_id: value })}
+              placeholder="Select a client..."
+              searchPlaceholder="Search clients..."
+              options={loadingClients ? [] : clients
+                .filter((c) => c.is_active !== false)
+                .map((client) => ({
+                  value: client.id,
+                  label: client.name,
+                }))}
+            />
+            {loadingClients && (
+              <p className="text-sm text-gray-500 mt-1">Loading clients...</p>
+            )}
+            {!formData.client_user_id && (
+              <p className="text-sm text-red-500 mt-1">Client is required</p>
+            )}
+          </div>
 
           <Textarea
             label="Description"
@@ -486,7 +588,7 @@ export default function ProjectsPage() {
               onClick={() => {
                 setIsEditModalOpen(false);
                 setSelectedProject(null);
-                setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '' });
+                setFormData({ name: '', location: '', start_date: '', end_date: '', description: '', budget: '', client_user_id: '' });
                 setError('');
               }}
               className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"

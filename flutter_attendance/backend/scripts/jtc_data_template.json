@@ -1,0 +1,315 @@
+{
+  "contract": {
+    "contract_number": "C220110T02",
+    "contract_awarded": "2023-03-31",
+    "contract_period_start": "2023-01-01",
+    "contract_period_end": "2027-12-31",
+    "part": "B&C",
+    "description": "2-YEAR TERM CONTRACT FOR PROVISION OF RESIDENT SITE SUPERVISORS FOR JTC'S BUILDING AND INFRASTRUCTURE PROJECTS (YEAR 2023 to 2025) (PART B & PART C)"
+  },
+  "projects": [
+    {
+      "name": "JTC BULIM PHASE 2 MAIN INFRASTRUCTURE WORKS-Part-C",
+      "location": "Bulim",
+      "start_date": "2024-09-01",
+      "end_date": "2027-12-31",
+      "description": "Project commenced on 1st Sep-2024",
+      "budget": null,
+      "employees": [
+        {
+          "name": "Ong Kian Hong (Alvin Ong)",
+          "email": "alvin.ong@jtc.com",
+          "phone": null,
+          "role": "SRE(C&S)"
+        },
+        {
+          "name": "Damodharan Ramesh",
+          "email": "damodharan.ramesh@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Thirunavukkarasu Yokesh",
+          "email": "thirunavukkarasu.yokesh@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Jay Vecino Manlupig",
+          "email": "jay.manlupig@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Chakkarapani Samidurai",
+          "email": "chakkarapani.samidurai@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Krishnamoorthy Parimelazhagan",
+          "email": "krishnamoorthy.parimelazhagan@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        }
+      ]
+    },
+    {
+      "name": "Construction Quality Department_CQD",
+      "location": "Various",
+      "start_date": "2024-01-01",
+      "end_date": "2027-12-31",
+      "description": "Construction Quality Department",
+      "budget": null,
+      "employees": [
+        {
+          "name": "Mokhairulamri Bin Mohamad",
+          "email": "mokhairulamri.mohamad@jtc.com",
+          "phone": null,
+          "role": "RE(C&S)"
+        },
+        {
+          "name": "Weerakkodi Arachchige Chanaka Prabhath",
+          "email": "chanaka.prabhath@jtc.com",
+          "phone": null,
+          "role": "RE(C&S/M&E)"
+        },
+        {
+          "name": "Yeo Pee Hock, Moses",
+          "email": "moses.yeo@jtc.com",
+          "phone": null,
+          "role": "RA"
+        },
+        {
+          "name": "Aung Zaw Moe",
+          "email": "aung.zawmoe@jtc.com",
+          "phone": null,
+          "role": "RE(M&E)"
+        }
+      ]
+    },
+    {
+      "name": "GP8_Demo",
+      "location": "Various",
+      "start_date": null,
+      "end_date": null,
+      "description": "GP8 Demo Project",
+      "budget": null,
+      "employees": [
+        {
+          "name": "Naganathan Samibalan",
+          "email": "naganathan.samibalan@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Kaliappan Ayyanar",
+          "email": "kaliappan.ayyanar@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Dhanasekaran T",
+          "email": "dhanasekaran.t@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Arokiya Doss Balaji",
+          "email": "arokiya.balaji@jtc.com",
+          "phone": null,
+          "role": "Stand-in RTO(C&S)"
+        }
+      ]
+    },
+    {
+      "name": "JTC Space at Ang Mo Kio",
+      "location": "Ang Mo Kio",
+      "start_date": null,
+      "end_date": null,
+      "description": "JTC Space project",
+      "budget": null,
+      "employees": [
+        {
+          "name": "Mohamed Shabaruddin",
+          "email": "mohamed.shabaruddin@jtc.com",
+          "phone": null,
+          "role": "RTO(Archi)"
+        },
+        {
+          "name": "Karuppaiya Prabhu",
+          "email": "karuppaiya.prabhu@jtc.com",
+          "phone": null,
+          "role": "RTO(Archi)"
+        },
+        {
+          "name": "Sasikumar",
+          "email": "sasikumar@jtc.com",
+          "phone": null,
+          "role": "RTO(M&E)"
+        },
+        {
+          "name": "Muthu Alagu",
+          "email": "muthu.alagu@jtc.com",
+          "phone": null,
+          "role": "RTO(M&E)"
+        },
+        {
+          "name": "Anandakumar Buvanraj",
+          "email": "anandakumar.buvanraj@jtc.com",
+          "phone": null,
+          "role": "RTO(M&E)"
+        }
+      ]
+    },
+    {
+      "name": "Interior Fit-Out Works at Level 21 at the JTC Summit office Building",
+      "location": "JTC Summit",
+      "start_date": null,
+      "end_date": null,
+      "description": "Interior Fit-Out Works",
+      "budget": null,
+      "employees": [
+        {
+          "name": "Shaik Sulaiman",
+          "email": "shaik.sulaiman@jtc.com",
+          "phone": null,
+          "role": "RTO(M&E)"
+        }
+      ]
+    },
+    {
+      "name": "Bahar Tunnel works",
+      "location": "Bahar",
+      "start_date": null,
+      "end_date": null,
+      "description": "Tunnel construction works",
+      "budget": null,
+      "ot_details": true,
+      "employees": [
+        {
+          "name": "Chen Ching Sheng",
+          "email": "chen.chingsheng@jtc.com",
+          "phone": null,
+          "role": "RE(C&S)"
+        },
+        {
+          "name": "Krishnan Ramanathan",
+          "email": "krishnan.ramanathan@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        }
+      ]
+    },
+    {
+      "name": "Re-sealant work at Treasury house",
+      "location": "Treasury House",
+      "start_date": null,
+      "end_date": null,
+      "description": "Re-sealant work",
+      "budget": null,
+      "ot_details": true,
+      "employees": [
+        {
+          "name": "Tan Chow Ken",
+          "email": "tan.chowken@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        }
+      ]
+    },
+    {
+      "name": "Re-sealant work at Revenue house",
+      "location": "Revenue House",
+      "start_date": null,
+      "end_date": null,
+      "description": "Re-sealant work",
+      "budget": null,
+      "employees": [
+        {
+          "name": "Lim Choo Cheng",
+          "email": "lim.choocheng@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Balasingam Selvakumar",
+          "email": "balasingam.selvakumar@jtc.com",
+          "phone": null,
+          "role": "Stand-in RTO(C&S)"
+        }
+      ]
+    },
+    {
+      "name": "New Erection of 4-Storey 66KV Substation (LNSS)_Part B",
+      "location": "Various",
+      "start_date": null,
+      "end_date": null,
+      "description": "4-Storey 66KV Substation",
+      "budget": null,
+      "ot_details": true,
+      "employees": [
+        {
+          "name": "Anbazhagan Lenin",
+          "email": "anbazhagan.lenin@jtc.com",
+          "phone": null,
+          "role": "RE(C&S)"
+        },
+        {
+          "name": "Sivaji Arul",
+          "email": "sivaji.arul@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Senthil Kumar",
+          "email": "senthil.kumar@jtc.com",
+          "phone": null,
+          "role": "RTO(M&E)"
+        },
+        {
+          "name": "Arickiaraj",
+          "email": "arickiaraj@jtc.com",
+          "phone": null,
+          "role": "RTO(Archi)"
+        },
+        {
+          "name": "Harish",
+          "email": "harish@jtc.com",
+          "phone": null,
+          "role": "Stand-in RTO(Archi)"
+        }
+      ]
+    },
+    {
+      "name": "A&A at 28 ARC",
+      "location": "28 ARC",
+      "start_date": null,
+      "end_date": null,
+      "description": "Additions and Alterations",
+      "budget": null,
+      "ot_details": true,
+      "employees": [
+        {
+          "name": "Uthirapathi Sam David",
+          "email": "uthirapathi.david@jtc.com",
+          "phone": null,
+          "role": "RE(C&S)"
+        },
+        {
+          "name": "Kaliappan Ravikumar",
+          "email": "kaliappan.ravikumar@jtc.com",
+          "phone": null,
+          "role": "RTO(C&S)"
+        },
+        {
+          "name": "Anbalagan Vidhya",
+          "email": "anbalagan.vidhya@jtc.com",
+          "phone": null,
+          "role": "RTO(M&E)"
+        }
+      ]
+    }
+  ]
+}
+

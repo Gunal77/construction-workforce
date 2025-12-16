@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Users, Building2, Clock, Eye, EyeOff, Server } from 'lucide-react';
 
 export default function LoginPage() {
@@ -186,8 +187,18 @@ export default function LoginPage() {
             </button>
           </form>
 
+          {/* Switch to Client Login */}
+          <div className="text-center">
+            <Link
+              href="/client-login"
+              className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+            >
+              Are you a client? Sign in here →
+            </Link>
+          </div>
+
           {/* Copyright */}
-          <div className="text-center text-xs text-gray-500 mt-8">
+          <div className="text-center text-xs text-gray-500 mt-4">
             © 2024 Project Workforce Admin. Enterprise Edition.
           </div>
         </div>

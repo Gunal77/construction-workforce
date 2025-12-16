@@ -1,12 +1,16 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { attendanceAPI, employeesAPI, projectsAPI } from '@/lib/api';
+import { attendanceAPI, employeesAPI, projectsAPI, lastEndDateAPI, leaveAPI } from '@/lib/api';
 import StatCard from '@/components/StatCard';
 import Card from '@/components/Card';
 import ProjectReportsTable from '@/components/ProjectReportsTable';
 import DateRangeFilter, { DateRange, CompareDateRange } from '@/components/DateRangeFilter';
-import { FolderKanban, Users as UsersIcon, Clock as ClockIcon, DollarSign } from 'lucide-react';
+import LastEndDateBadge from '@/components/LastEndDateBadge';
+import LeaveApprovalTable from '@/components/LeaveApprovalTable';
+import WorkerAttendanceReportTable from '@/components/WorkerAttendanceReportTable';
+import { FolderKanban, Users as UsersIcon, Clock as ClockIcon, DollarSign, Calendar, Filter } from 'lucide-react';
+import Pagination from '@/components/Pagination';
 
 interface ReportsData {
   totalProjects: number;
@@ -45,17 +49,35 @@ export default function ReportsPage() {
     budgetUtilization: 0,
     projectReports: [],
   });
-  const [dateRange, setDateRange] = useState<DateRange>({
-    from: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-    to: new Date(),
+  const [fromDate, setFromDate] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
   });
+  const [toDate, setToDate] = useState<Date>(new Date());
   const [compareRange, setCompareRange] = useState<CompareDateRange | undefined>(undefined);
+  const [lastEndDates, setLastEndDates] = useState<Record<string, string | null>>({});
+  const [inactiveDaysFilter, setInactiveDaysFilter] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
+  const [leaveStats, setLeaveStats] = useState<any>(null);
+  const [showLeaveSection, setShowLeaveSection] = useState(false);
+  const [allWorkers, setAllWorkers] = useState<any[]>([]);
+  const [projectReportsPage, setProjectReportsPage] = useState(1);
+  const [workerReportsPage, setWorkerReportsPage] = useState(1);
+  const [leaveRequestsPage, setLeaveRequestsPage] = useState(1);
+  
+  const ITEMS_PER_PAGE = 10;
 
-  const fetchReportsData = useCallback(async (range: DateRange, compare?: CompareDateRange) => {
+  const fetchReportsData = useCallback(async () => {
     try {
-      setLoading(true);
+      // Only show full loading on initial load
+      if (reportsData.totalProjects === 0) {
+        setLoading(true);
+      } else {
+        // For subsequent filters, show subtle loading
+        setLoading(true);
+      }
       
-      // Normalize dates to start/end of day for proper comparison
       const normalizeDateToStartOfDay = (date: Date) => {
         const normalized = new Date(date);
         normalized.setHours(0, 0, 0, 0);
@@ -68,14 +90,17 @@ export default function ReportsPage() {
         return normalized;
       };
       
-      const fromDate = range.from ? range.from.toISOString().split('T')[0] : undefined;
-      const toDate = range.to ? range.to.toISOString().split('T')[0] : undefined;
+      const finalFrom = fromDate <= toDate ? fromDate : toDate;
+      const finalTo = toDate >= fromDate ? toDate : fromDate;
+      
+      const fromDateStr = finalFrom.toISOString().split('T')[0];
+      const toDateStr = finalTo.toISOString().split('T')[0];
 
       const [employeesRes, attendanceRes, projectsRes] = await Promise.all([
         employeesAPI.getAll(),
         attendanceAPI.getAll({
-          from: fromDate,
-          to: toDate,
+          from: fromDateStr,
+          to: toDateStr,
           sortBy: 'check_in_time',
           sortOrder: 'desc',
         }),
@@ -85,6 +110,62 @@ export default function ReportsPage() {
       const workers = employeesRes.employees || [];
       const attendanceRecords = attendanceRes.records || [];
       const projects = projectsRes.projects || [];
+
+      let filteredWorkers = workers;
+      
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        filteredWorkers = filteredWorkers.filter((w: any) => {
+          const name = w.name?.toLowerCase() || '';
+          const email = w.email?.toLowerCase() || '';
+          const role = w.role?.toLowerCase() || '';
+          return name.includes(query) || email.includes(query) || role.includes(query);
+        });
+      }
+      
+      const employeeIds = filteredWorkers.map((w: any) => w.id);
+      
+      try {
+        const lastEndDatesRes = await lastEndDateAPI.getAll({ 
+          employeeIds,
+          inactiveDays: inactiveDaysFilter || undefined,
+        });
+        const datesMap: Record<string, string | null> = {};
+        (lastEndDatesRes.lastEndDates || []).forEach((item: any) => {
+          datesMap[item.employee_id] = item.last_end_date;
+        });
+        setLastEndDates(datesMap);
+        
+        if (inactiveDaysFilter !== null) {
+          const cutoffDate = new Date();
+          cutoffDate.setDate(cutoffDate.getDate() - inactiveDaysFilter);
+          cutoffDate.setHours(0, 0, 0, 0);
+          
+          filteredWorkers = filteredWorkers.filter((w: any) => {
+            const lastEndDate = datesMap[w.id];
+            if (!lastEndDate) return true;
+            const endDate = new Date(lastEndDate);
+            endDate.setHours(0, 0, 0, 0);
+            return endDate < cutoffDate;
+          });
+        }
+      } catch (err) {
+        console.error('Error fetching last end dates:', err);
+      }
+      
+      setAllWorkers(filteredWorkers);
+
+      // Fetch leave statistics
+      try {
+        const currentYear = new Date().getFullYear();
+        const statsRes = await leaveAPI.getStatistics(currentYear);
+        setLeaveStats(statsRes);
+        
+        const requestsRes = await leaveAPI.getRequests({ year: currentYear });
+        setLeaveRequests(requestsRes.requests || []);
+      } catch (err) {
+        console.error('Error fetching leave data:', err);
+      }
 
       // Calculate statistics for selected date range
       const activeProjects = projects.filter((p: any) => !p.end_date || new Date(p.end_date) > new Date()).length;
@@ -99,8 +180,8 @@ export default function ReportsPage() {
       // Calculate total hours for selected date range
       // Backend should already filter by date range, but we do client-side filtering as well
       // to ensure accuracy (in case backend filtering has timezone issues)
-      const rangeStart = range.from ? normalizeDateToStartOfDay(range.from) : null;
-      const rangeEnd = range.to ? normalizeDateToEndOfDay(range.to) : null;
+      const rangeStart = normalizeDateToStartOfDay(finalFrom);
+      const rangeEnd = normalizeDateToEndOfDay(finalTo);
       
       const rangeRecords = attendanceRecords.filter((record: any) => {
         if (!record.check_out_time) return false;
@@ -118,17 +199,17 @@ export default function ReportsPage() {
 
       // Calculate comparison hours if compare is enabled
       let hoursTrend = 0;
-      if (compare?.enabled && compare.from && compare.to) {
-        const compareFromDate = compare.from.toISOString().split('T')[0];
-        const compareToDate = compare.to.toISOString().split('T')[0];
+      if (compareRange?.enabled && compareRange.from && compareRange.to) {
+        const compareFromDate = compareRange.from.toISOString().split('T')[0];
+        const compareToDate = compareRange.to.toISOString().split('T')[0];
         
         const compareAttendanceRes = await attendanceAPI.getAll({
           from: compareFromDate,
           to: compareToDate,
         });
         
-        const compareStart = compare.from ? normalizeDateToStartOfDay(compare.from) : null;
-        const compareEnd = compare.to ? normalizeDateToEndOfDay(compare.to) : null;
+        const compareStart = compareRange.from ? normalizeDateToStartOfDay(compareRange.from) : null;
+        const compareEnd = compareRange.to ? normalizeDateToEndOfDay(compareRange.to) : null;
         
         const compareRecords = (compareAttendanceRes.records || []).filter((record: any) => {
           if (!record.check_out_time) return false;
@@ -149,40 +230,38 @@ export default function ReportsPage() {
           : 0;
       } else {
         // Compare with previous period (same duration before selected range)
-        if (range.from && range.to) {
-          const duration = range.to.getTime() - range.from.getTime();
-          const prevTo = new Date(range.from.getTime() - 1);
-          const prevFrom = new Date(prevTo.getTime() - duration);
-          
-          const prevFromDate = prevFrom.toISOString().split('T')[0];
-          const prevToDate = prevTo.toISOString().split('T')[0];
-          
-          const prevAttendanceRes = await attendanceAPI.getAll({
-            from: prevFromDate,
-            to: prevToDate,
-          });
-          
-          const prevStart = normalizeDateToStartOfDay(prevFrom);
-          const prevEnd = normalizeDateToEndOfDay(prevTo);
-          
-          const prevRecords = (prevAttendanceRes.records || []).filter((record: any) => {
-            if (!record.check_out_time) return false;
-            const recordDate = normalizeDateToStartOfDay(new Date(record.check_in_time));
-            return recordDate >= prevStart && recordDate <= prevEnd;
-          });
-          
-          const prevHours = prevRecords.reduce((sum: number, record: any) => {
-            const checkIn = new Date(record.check_in_time);
-            const checkOut = new Date(record.check_out_time);
-            const diff = checkOut.getTime() - checkIn.getTime();
-            const hours = diff / (1000 * 60 * 60);
-            return sum + hours;
-          }, 0);
+        const duration = finalTo.getTime() - finalFrom.getTime();
+        const prevTo = new Date(finalFrom.getTime() - 1);
+        const prevFrom = new Date(prevTo.getTime() - duration);
+        
+        const prevFromDate = prevFrom.toISOString().split('T')[0];
+        const prevToDate = prevTo.toISOString().split('T')[0];
+        
+        const prevAttendanceRes = await attendanceAPI.getAll({
+          from: prevFromDate,
+          to: prevToDate,
+        });
+        
+        const prevStart = normalizeDateToStartOfDay(prevFrom);
+        const prevEnd = normalizeDateToEndOfDay(prevTo);
+        
+        const prevRecords = (prevAttendanceRes.records || []).filter((record: any) => {
+          if (!record.check_out_time) return false;
+          const recordDate = normalizeDateToStartOfDay(new Date(record.check_in_time));
+          return recordDate >= prevStart && recordDate <= prevEnd;
+        });
+        
+        const prevHours = prevRecords.reduce((sum: number, record: any) => {
+          const checkIn = new Date(record.check_in_time);
+          const checkOut = new Date(record.check_out_time);
+          const diff = checkOut.getTime() - checkIn.getTime();
+          const hours = diff / (1000 * 60 * 60);
+          return sum + hours;
+        }, 0);
 
-          hoursTrend = prevHours > 0 
-            ? ((totalHours - prevHours) / prevHours) * 100 
-            : 0;
-        }
+        hoursTrend = prevHours > 0 
+          ? ((totalHours - prevHours) / prevHours) * 100 
+          : 0;
       }
 
       // Calculate total budget
@@ -201,12 +280,22 @@ export default function ReportsPage() {
 
       const budgetUtilization = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
 
-      // Project reports data filtered by date range
+      // Create a map of user emails to employee project IDs for efficient lookup
+      const emailToProjectMap: Record<string, string> = {};
+      workers.forEach((w: any) => {
+        if (w.email && w.project_id) {
+          emailToProjectMap[w.email.toLowerCase()] = w.project_id;
+        }
+      });
+
       const projectReports = projects.map((project: any) => {
-        const projectWorkers = workers.filter((w: any) => w.project_id === project.id);
-        const projectRecords = rangeRecords.filter((r: any) => 
-          projectWorkers.some((w: any) => w.id === r.user_id)
-        );
+        const projectWorkers = filteredWorkers.filter((w: any) => w.project_id === project.id);
+        // Match attendance records by email (attendance has user_email, employees have email)
+        const projectRecords = rangeRecords.filter((r: any) => {
+          if (!r.user_email) return false;
+          const recordEmail = r.user_email.toLowerCase();
+          return emailToProjectMap[recordEmail] === project.id;
+        });
         
         const projectHours = projectRecords.reduce((sum: number, record: any) => {
           const checkIn = new Date(record.check_in_time);
@@ -265,7 +354,7 @@ export default function ReportsPage() {
       setReportsData({
         totalProjects: projects.length,
         activeProjects,
-        totalWorkers: workers.length,
+        totalWorkers: filteredWorkers.length,
         activeToday,
         totalHours: Math.round(totalHours),
         hoursTrend,
@@ -279,18 +368,39 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fromDate, toDate, inactiveDaysFilter, searchQuery, compareRange]);
 
   useEffect(() => {
-    fetchReportsData(dateRange, compareRange);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // Store scroll position before fetching
+    const scrollPosition = window.scrollY;
+    
+    fetchReportsData();
+    
+    // Restore scroll position after a brief delay to prevent scroll reset
+    const timeoutId = setTimeout(() => {
+      window.scrollTo(0, scrollPosition);
+    }, 100);
+    
+    return () => clearTimeout(timeoutId);
+  }, [fetchReportsData]);
 
   const handleDateRangeChange = useCallback((range: DateRange, compare?: CompareDateRange) => {
-    setDateRange(range);
+    // Store scroll position to restore after update
+    const scrollPosition = window.scrollY;
+    
+    // Update state
+    if (range.from) setFromDate(range.from);
+    if (range.to) setToDate(range.to);
     setCompareRange(compare);
-    fetchReportsData(range, compare);
-  }, [fetchReportsData]);
+    setProjectReportsPage(1);
+    setWorkerReportsPage(1);
+    setLeaveRequestsPage(1);
+    
+    // Restore scroll position after a brief delay
+    setTimeout(() => {
+      window.scrollTo(0, scrollPosition);
+    }, 100);
+  }, []);
 
   const getTrendLabel = () => {
     if (compareRange?.enabled) {
@@ -305,7 +415,32 @@ export default function ReportsPage() {
     return 'vs previous period';
   };
 
-  if (loading) {
+  // Paginated Project Reports
+  const paginatedProjectReports = useMemo(() => {
+    const startIndex = (projectReportsPage - 1) * ITEMS_PER_PAGE;
+    return reportsData.projectReports.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [reportsData.projectReports, projectReportsPage]);
+  const projectReportsTotalPages = Math.ceil(reportsData.projectReports.length / ITEMS_PER_PAGE);
+
+  // Paginated Workers
+  const paginatedWorkers = useMemo(() => {
+    const startIndex = (workerReportsPage - 1) * ITEMS_PER_PAGE;
+    return allWorkers.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [allWorkers, workerReportsPage]);
+  const workerReportsTotalPages = Math.ceil(allWorkers.length / ITEMS_PER_PAGE);
+
+  // Paginated Leave Requests
+  const pendingLeaveRequests = useMemo(() => {
+    return leaveRequests.filter((r: any) => r.status === 'pending');
+  }, [leaveRequests]);
+  const paginatedLeaveRequests = useMemo(() => {
+    const startIndex = (leaveRequestsPage - 1) * ITEMS_PER_PAGE;
+    return pendingLeaveRequests.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [pendingLeaveRequests, leaveRequestsPage]);
+  const leaveRequestsTotalPages = Math.ceil(pendingLeaveRequests.length / ITEMS_PER_PAGE);
+
+  // Show loading overlay instead of replacing entire page
+  if (loading && reportsData.totalProjects === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-gray-500">Loading reports...</div>
@@ -314,7 +449,17 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="space-y-4 md:space-y-6 w-full max-w-full overflow-x-hidden">
+    <div className="space-y-4 md:space-y-6 w-full max-w-full overflow-x-hidden relative">
+      {/* Loading Overlay */}
+      {loading && reportsData.totalProjects > 0 && (
+        <div className="absolute inset-0 bg-white bg-opacity-75 z-50 flex items-center justify-center">
+          <div className="flex flex-col items-center space-y-2">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+            <div className="text-sm text-gray-600">Updating reports...</div>
+          </div>
+        </div>
+      )}
+
       <div>
         <h1 className="text-xl md:text-2xl font-bold text-gray-800">Reports & Analytics</h1>
         <p className="text-sm md:text-base text-gray-600 mt-1">Comprehensive project, attendance, and performance reports</p>
@@ -325,7 +470,8 @@ export default function ReportsPage() {
         <DateRangeFilter onDateRangeChange={handleDateRangeChange} />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full max-w-full">
         <StatCard
           title="Total Projects"
           value={reportsData.totalProjects}
@@ -357,8 +503,135 @@ export default function ReportsPage() {
       </div>
 
       <Card title="Project Reports">
-        <ProjectReportsTable data={reportsData.projectReports} />
+        <div className="space-y-4">
+          {reportsData.projectReports.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">No data found for selected filters</div>
+          ) : (
+            <>
+              <div className="text-sm text-gray-600">
+                Showing {((projectReportsPage - 1) * ITEMS_PER_PAGE) + 1} - {Math.min(projectReportsPage * ITEMS_PER_PAGE, reportsData.projectReports.length)} of {reportsData.projectReports.length} projects
+              </div>
+              <ProjectReportsTable data={paginatedProjectReports} />
+              {projectReportsTotalPages > 1 && (
+                <Pagination
+                  currentPage={projectReportsPage}
+                  totalPages={projectReportsTotalPages}
+                  onPageChange={setProjectReportsPage}
+                />
+              )}
+            </>
+          )}
+        </div>
       </Card>
+
+      {/* Worker Attendance Report with Last End Dates */}
+      <Card title="Worker Attendance Report">
+        <div className="mb-4">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setWorkerReportsPage(1);
+            }}
+            placeholder="Search by name, email, or role..."
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+          />
+        </div>
+        <div className="mb-4">
+          <select
+            value={inactiveDaysFilter || ''}
+            onChange={(e) => {
+              const value = e.target.value ? parseInt(e.target.value, 10) : null;
+              setInactiveDaysFilter(value);
+              setWorkerReportsPage(1);
+            }}
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+          >
+            <option value="">All Workers</option>
+            <option value="1">Inactive 1+ days</option>
+            <option value="3">Inactive 3+ days</option>
+            <option value="7">Inactive 7+ days</option>
+            <option value="14">Inactive 14+ days</option>
+            <option value="30">Inactive 30+ days</option>
+          </select>
+        </div>
+        {allWorkers.length === 0 && !loading ? (
+          <div className="text-center py-8 text-gray-500">
+            No data found for selected filters
+          </div>
+        ) : (
+          <WorkerAttendanceReportTable
+            workers={allWorkers}
+            lastEndDates={lastEndDates}
+            currentPage={workerReportsPage}
+            onPageChange={setWorkerReportsPage}
+            itemsPerPage={ITEMS_PER_PAGE}
+          />
+        )}
+      </Card>
+
+      {/* Leave Management Section */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-2">
+            <Calendar className="h-5 w-5 text-primary-600" />
+            <h2 className="text-xl font-bold text-gray-800">Leave Management</h2>
+          </div>
+          <button
+            onClick={() => setShowLeaveSection(!showLeaveSection)}
+            className="px-4 py-2 text-sm font-medium text-primary-600 hover:text-primary-700"
+          >
+            {showLeaveSection ? 'Hide' : 'Show'} Leave Reports
+          </button>
+        </div>
+
+        {showLeaveSection && (
+          <div className="space-y-6">
+            {/* Leave Statistics */}
+            {leaveStats && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+                  <p className="text-sm text-yellow-600 font-medium mb-1">Pending Requests</p>
+                  <p className="text-2xl font-bold text-yellow-900">{leaveStats.pendingCount || 0}</p>
+                </div>
+                {leaveStats.usageByType && leaveStats.usageByType.length > 0 && (
+                  <>
+                    {leaveStats.usageByType.map((type: any) => (
+                      <div key={type.leave_type_code} className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                        <p className="text-sm text-blue-600 font-medium mb-1">{type.leave_type_name}</p>
+                        <p className="text-2xl font-bold text-blue-900">{type.total_days || 0}</p>
+                        <p className="text-xs text-blue-600 mt-1">{type.request_count} requests</p>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Leave Requests Table */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Recent Leave Requests</h3>
+              <LeaveApprovalTable
+                requests={pendingLeaveRequests}
+                currentPage={leaveRequestsPage}
+                onPageChange={setLeaveRequestsPage}
+                itemsPerPage={ITEMS_PER_PAGE}
+                onUpdate={() => {
+                  const currentYear = new Date().getFullYear();
+                  leaveAPI.getRequests({ year: currentYear }).then((res) => {
+                    setLeaveRequests(res.requests || []);
+                    setLeaveRequestsPage(1); // Reset to first page after update
+                  });
+                  leaveAPI.getStatistics(currentYear).then((res) => {
+                    setLeaveStats(res);
+                  });
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

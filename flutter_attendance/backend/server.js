@@ -5,10 +5,16 @@ const { initializeDatabase } = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuth');
 const supervisorAuthRoutes = require('./routes/supervisorAuth');
+const unifiedAuthRoutes = require('./routes/unifiedAuth'); // NEW: Unified authentication
 const supervisorRoutes = require('./routes/supervisorRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
+const leaveRoutes = require('./routes/leaveRoutes');
+const timesheetRoutes = require('./routes/timesheetRoutes');
 const adminProjectsRoutes = require('./routes/adminProjects');
 const adminEmployeesRoutes = require('./routes/adminEmployees');
+const adminClientsRoutes = require('./routes/adminClients');
+const clientProjectsRoutes = require('./routes/clientProjects');
+const clientAuthRoutes = require('./routes/clientAuth');
 
 const app = express();
 
@@ -20,12 +26,18 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
-app.use(['/api/admin/auth', '/admin/auth'], adminAuthRoutes);
-app.use(['/api/supervisor/auth', '/supervisor/auth'], supervisorAuthRoutes);
+app.use('/api/v2/auth', unifiedAuthRoutes); // NEW: Unified authentication endpoint
+app.use(['/api/admin/auth', '/admin/auth'], adminAuthRoutes); // Legacy
+app.use(['/api/supervisor/auth', '/supervisor/auth'], supervisorAuthRoutes); // Legacy
 app.use(['/api/supervisor', '/supervisor'], supervisorRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/leave', leaveRoutes);
+app.use('/api/timesheets', timesheetRoutes);
 app.use(['/api/admin/projects', '/admin/projects'], adminProjectsRoutes);
 app.use(['/api/admin/employees', '/admin/employees'], adminEmployeesRoutes);
+app.use(['/api/admin/clients', '/admin/clients'], adminClientsRoutes);
+app.use(['/api/client/projects', '/client/projects'], clientProjectsRoutes);
+app.use(['/api/client', '/client'], clientAuthRoutes);
 
 // Not found handler
 app.use((req, res) => {

@@ -8,6 +8,11 @@ import StatCard from '@/components/StatCard';
 import Input from '@/components/Input';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Plus, Search, CheckCircle2, XCircle, Calendar } from 'lucide-react';
+import { lastEndDateAPI } from '@/lib/api';
+import LastEndDateBadge from '@/components/LastEndDateBadge';
+import Pagination from '@/components/Pagination';
+
+const ITEMS_PER_PAGE = 10;
 
 export default function AttendancePage() {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
@@ -20,6 +25,8 @@ export default function AttendancePage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [projectFilter, setProjectFilter] = useState('all');
   const [employeeFilter, setEmployeeFilter] = useState('');
+  const [lastEndDates, setLastEndDates] = useState<Record<string, string | null>>({});
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Form state for manual attendance
   const [formData, setFormData] = useState({
@@ -34,11 +41,38 @@ export default function AttendancePage() {
     fetchWorkers();
     fetchProjects();
     fetchAttendance();
+    fetchLastEndDates();
   }, []);
+
+  const fetchLastEndDates = async () => {
+    try {
+      if (workers.length === 0) return;
+      
+      const employeeIds = workers.map(w => w.id);
+      const response = await lastEndDateAPI.getAll({ employeeIds });
+      const datesMap: Record<string, string | null> = {};
+      
+      (response.lastEndDates || []).forEach((item: any) => {
+        // Map by employee_id from response
+        datesMap[item.employee_id] = item.last_end_date;
+      });
+      
+      setLastEndDates(datesMap);
+    } catch (err: any) {
+      console.error('Error fetching last end dates:', err);
+    }
+  };
 
   useEffect(() => {
     fetchAttendance();
+    setCurrentPage(1); // Reset to first page when filters change
   }, [statusFilter, projectFilter, employeeFilter]);
+
+  useEffect(() => {
+    if (workers.length > 0) {
+      fetchLastEndDates();
+    }
+  }, [workers]);
 
   const fetchWorkers = async () => {
     try {
@@ -113,6 +147,7 @@ export default function AttendancePage() {
         longitude: '',
       });
       fetchAttendance();
+      fetchLastEndDates();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to create attendance record');
     }
@@ -182,6 +217,17 @@ export default function AttendancePage() {
 
     return filtered;
   }, [attendanceRecords, searchQuery, statusFilter, projectFilter, employeeFilter, workers]);
+
+  // Paginate filtered records
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    return filteredRecords.slice(startIndex, endIndex);
+  }, [filteredRecords, currentPage]);
+
+  const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE + 1;
+  const endIndex = Math.min(currentPage * ITEMS_PER_PAGE, filteredRecords.length);
 
   const columns = [
     {
@@ -267,6 +313,15 @@ export default function AttendancePage() {
         );
       },
     },
+    {
+      key: 'last_end_date',
+      header: 'Last End Date',
+      render: (item: AttendanceRecord) => {
+        const worker = workers.find((w) => w.id === item.user_id);
+        const lastEndDate = worker ? lastEndDates[worker.id] : null;
+        return <LastEndDateBadge lastEndDate={lastEndDate} />;
+      },
+    },
   ];
 
   if (loading && attendanceRecords.length === 0) {
@@ -315,16 +370,22 @@ export default function AttendancePage() {
               <input
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by staff name, email, or project..."
-                className="w-full pl-12 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-              />
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1); // Reset to first page on search change
+              }}
+              placeholder="Search by staff name, email, or project..."
+              className="w-full pl-12 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+            />
             </div>
           </div>
           <div className="w-full sm:w-auto min-w-[150px]">
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1); // Reset to first page on filter change
+              }}
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
             >
               <option value="all">All Status</option>
@@ -351,7 +412,10 @@ export default function AttendancePage() {
                 })),
               ]}
               value={employeeFilter}
-              onChange={(value) => setEmployeeFilter(value)}
+              onChange={(value) => {
+                setEmployeeFilter(value);
+                setCurrentPage(1); // Reset to first page on filter change
+              }}
               placeholder="Filter by employee"
               searchPlaceholder="Search employees..."
             />
@@ -366,7 +430,10 @@ export default function AttendancePage() {
                 })),
               ]}
               value={projectFilter}
-              onChange={(value) => setProjectFilter(value)}
+              onChange={(value) => {
+                setProjectFilter(value);
+                setCurrentPage(1); // Reset to first page on filter change
+              }}
               placeholder="Filter by project"
               searchPlaceholder="Search projects..."
             />
@@ -388,12 +455,26 @@ export default function AttendancePage() {
           <p className="text-sm text-gray-400 mt-2">Try adding manual attendance or check if workers have checked in</p>
         </div>
       ) : (
-        <Table
-          columns={columns}
-          data={filteredRecords}
-          keyExtractor={(item) => item.id}
-          emptyMessage="No attendance records found"
-        />
+        <>
+          {filteredRecords.length > 0 && (
+            <p className="text-sm text-gray-600 mb-4">
+              Showing {startIndex} - {endIndex} of {filteredRecords.length} records
+            </p>
+          )}
+          <Table
+            columns={columns}
+            data={paginatedRecords}
+            keyExtractor={(item) => item.id}
+            emptyMessage="No attendance records found"
+          />
+          {totalPages > 1 && (
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          )}
+        </>
       )}
 
       {/* Add Manual Attendance Modal */}
