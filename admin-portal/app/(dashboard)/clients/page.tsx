@@ -6,7 +6,7 @@ import ClientCard from '@/components/ClientCard';
 import ClientForm from '@/components/ClientForm';
 import Input from '@/components/Input';
 import Select from '@/components/Select';
-import { getAllClients, createClient as createClientAction, updateClient as updateClientAction, ClientData } from '@/app/actions/clientActions';
+import { createClient as createClientAction, updateClient as updateClientAction, ClientData } from '@/app/actions/clientActions';
 
 type Client = ClientData;
 
@@ -52,22 +52,38 @@ export default function ClientsPage() {
   const fetchClients = async () => {
     try {
       setLoading(true);
-      const response = await getAllClients({
-        page: currentPage,
-        limit: 9,
-        search: searchQuery, // Use searchQuery (set by button)
-        sortBy,
-        sortOrder,
-        statusFilter,
+      
+      // Build query parameters
+      const params = new URLSearchParams();
+      if (searchQuery) params.append('search', searchQuery);
+      if (statusFilter !== 'all') params.append('isActive', statusFilter === 'active' ? 'true' : 'false');
+      params.append('sortBy', sortBy);
+      params.append('sortOrder', sortOrder);
+      
+      const queryString = params.toString();
+      const url = `/api/proxy/clients${queryString ? `?${queryString}` : ''}`;
+      
+      const response = await fetch(url, {
+        credentials: 'include',
       });
       
-      if (response.success) {
-        setClients(response.data || []);
-        if (response.pagination) {
-          setPagination(response.pagination);
-        }
+      const data = await response.json();
+      
+      if (data.success) {
+        setClients(data.data || []);
+        // Calculate pagination from backend response
+        const total = data.count || data.data?.length || 0;
+        const totalPages = Math.ceil(total / 9);
+        setPagination({
+          page: currentPage,
+          limit: 9,
+          total: total,
+          totalPages: totalPages,
+          hasNextPage: currentPage < totalPages,
+          hasPrevPage: currentPage > 1,
+        });
       } else {
-        alert(response.error || 'Failed to fetch clients');
+        alert(data.error || 'Failed to fetch clients');
       }
     } catch (error: any) {
       console.error('Error fetching clients:', error);

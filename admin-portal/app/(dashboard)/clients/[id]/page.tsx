@@ -15,7 +15,7 @@ import {
   Building2,
   AlertCircle,
 } from 'lucide-react';
-import { getClientById, getClientStats, updateClient as updateClientAction, deleteClient as deleteClientAction } from '@/app/actions/clientActions';
+import { updateClient as updateClientAction, deleteClient as deleteClientAction } from '@/app/actions/clientActions';
 import ClientForm from '@/components/ClientForm';
 import StatCard from '@/components/StatCard';
 
@@ -38,15 +38,68 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
   const fetchClientData = async () => {
     try {
       setLoading(true);
+      
+      // Use backend API instead of Supabase directly
       const [clientResponse, statsResponse] = await Promise.all([
-        getClientById(params.id),
-        getClientStats(params.id),
+        fetch(`/api/proxy/clients/${params.id}`, {
+          credentials: 'include',
+        }).then(res => res.json()),
+        fetch(`/api/proxy/clients/${params.id}/stats`, {
+          credentials: 'include',
+        }).then(res => res.json()),
       ]);
       
+      console.log('Client Response:', clientResponse);
+      console.log('Stats Response:', statsResponse);
+      
       if (clientResponse.success && statsResponse.success) {
-        setClient(clientResponse.data);
+        console.log('✅ Client Response Success');
+        console.log('Projects count:', clientResponse.data?.projects?.length);
+        console.log('Supervisors count:', clientResponse.data?.supervisors?.length);
+        console.log('Staff count:', clientResponse.data?.staff?.length);
+        
+        // Verify all projects belong to this client
+        if (clientResponse.data?.projects) {
+          const allBelongToClient = clientResponse.data.projects.every((p: any) => 
+            p.client_user_id === params.id || !p.client_user_id
+          );
+          console.log('✅ All projects belong to this client:', allBelongToClient);
+          if (!allBelongToClient) {
+            console.error('❌ ERROR: Some projects do not belong to this client!');
+            clientResponse.data.projects.forEach((p: any) => {
+              if (p.client_user_id !== params.id) {
+                console.error('   Project', p.name, 'has client_user_id:', p.client_user_id, 'but expected:', params.id);
+              }
+            });
+          }
+        }
+        
+        // Verify all supervisors belong to this client
+        if (clientResponse.data?.supervisors) {
+          const allBelongToClient = clientResponse.data.supervisors.every((s: any) => 
+            s.client_user_id === params.id || !s.client_user_id
+          );
+          console.log('✅ All supervisors belong to this client:', allBelongToClient);
+        }
+        
+        // Verify all staff belong to this client
+        if (clientResponse.data?.staff) {
+          const allBelongToClient = clientResponse.data.staff.every((e: any) => 
+            e.client_user_id === params.id || !e.client_user_id
+          );
+          console.log('✅ All staff belong to this client:', allBelongToClient);
+        }
+        
+        // Set only the filtered data from backend
+        setClient({
+          ...clientResponse.data,
+          projects: clientResponse.data?.projects || [],
+          supervisors: clientResponse.data?.supervisors || [],
+          staff: clientResponse.data?.staff || [],
+        });
         setStats(statsResponse.data);
       } else {
+        console.error('Failed to fetch client data:', clientResponse, statsResponse);
         alert(clientResponse.error || statsResponse.error || 'Failed to fetch client data');
         router.push('/clients');
       }
@@ -306,12 +359,16 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
         />
       </div>
 
-      {/* Projects Section - Coming Soon */}
+      {/* Projects Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Projects</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+          Projects ({client.projects?.length || 0})
+        </h2>
         {client.projects && client.projects.length > 0 ? (
           <div className="space-y-3">
-            {client.projects.map((project: any) => (
+            {client.projects
+              .filter((project: any) => !project.client_user_id || project.client_user_id === params.id)
+              .map((project: any) => (
               <div
                 key={project.id}
                 className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
@@ -343,10 +400,14 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
 
       {/* Supervisors Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Supervisors</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+          Supervisors ({client.supervisors?.length || 0})
+        </h2>
         {client.supervisors && client.supervisors.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {client.supervisors.map((supervisor: any) => (
+            {client.supervisors
+              .filter((supervisor: any) => !supervisor.client_user_id || supervisor.client_user_id === params.id)
+              .map((supervisor: any) => (
               <div
                 key={supervisor.id}
                 className="flex items-center space-x-3 p-4 border border-gray-200 rounded-lg"
@@ -368,10 +429,14 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
 
       {/* Staff Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Staff</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+          Staff ({client.staff?.length || 0})
+        </h2>
         {client.staff && client.staff.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {client.staff.map((staff: any) => (
+            {client.staff
+              .filter((staff: any) => !staff.client_user_id || staff.client_user_id === params.id)
+              .map((staff: any) => (
               <div
                 key={staff.id}
                 className="flex items-center space-x-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"

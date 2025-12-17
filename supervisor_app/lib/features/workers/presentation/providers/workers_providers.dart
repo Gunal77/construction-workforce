@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/utils/result.dart';
+import '../../../../core/utils/auth_error_handler.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../../data/models/worker_model.dart';
 import '../../data/datasources/workers_remote_datasource.dart';
@@ -30,12 +31,32 @@ final workersProvider = FutureProvider<List<WorkerModel>>((ref) async {
       case Failure<List<WorkerModel>>(:final error):
         print('❌ Error fetching workers: $error');
         print('❌ Error type: ${error.runtimeType}');
+        
+        // Check if it's an authentication error
+        if (AuthErrorHandler.isAuthenticationError(error)) {
+          print('🔐 Authentication error detected - clearing tokens');
+          final apiClient = ref.read(apiClientProvider);
+          await AuthErrorHandler.handleAuthError(apiClient);
+          // Invalidate auth state to trigger navigation to login
+          ref.invalidate(authStateProvider);
+        }
+        
         // Failure always contains an Exception
         throw error;
     }
   } catch (e) {
     print('💥 Exception in workersProvider: $e');
     print('💥 Exception type: ${e.runtimeType}');
+    
+    // Check if it's an authentication error
+    if (AuthErrorHandler.isAuthenticationError(e)) {
+      print('🔐 Authentication error detected - clearing tokens');
+      final apiClient = ref.read(apiClientProvider);
+      await AuthErrorHandler.handleAuthError(apiClient);
+      // Invalidate auth state to trigger navigation to login
+      ref.invalidate(authStateProvider);
+    }
+    
     rethrow;
   }
 });

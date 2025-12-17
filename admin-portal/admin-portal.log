@@ -1,0 +1,174 @@
+
+> admin-portal@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.5
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2s
+ ✓ Compiled /middleware in 181ms (73 modules)
+ ○ Compiling / ...
+ ✓ Compiled / in 3.1s (510 modules)
+ GET / 200 in 3241ms
+ ✓ Compiled in 306ms (254 modules)
+ ✓ Compiled in 275ms (254 modules)
+ ○ Compiling /clients/[id] ...
+ ✓ Compiled /clients/[id] in 844ms (686 modules)
+ GET /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 1284ms
+⚠️  Node.js 18 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 20 or later. For more information, visit: https://github.com/orgs/supabase/discussions/37217
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+Error fetching projects: {
+  code: '42703',
+  details: null,
+  hint: null,
+  message: 'column projects.status does not exist'
+}
+Found 0 projects for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 3 supervisors for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 82 staff for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 1730ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 3505ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+Error fetching projects: {
+  code: '42703',
+  details: null,
+  hint: null,
+  message: 'column projects.status does not exist'
+}
+Found 0 projects for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 3 supervisors for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 82 staff for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 1743ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 2440ms
+ ○ Compiling /workers ...
+ ✓ Compiled /workers in 606ms (889 modules)
+ ✓ Compiled /api/proxy/employees in 104ms (577 modules)
+ GET /api/proxy/employees 200 in 641ms
+ GET /api/proxy/employees 200 in 651ms
+ ✓ Compiled /clients in 193ms (942 modules)
+⚠️  Node.js 18 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 20 or later. For more information, visit: https://github.com/orgs/supabase/discussions/37217
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+🔍 Fetching clients with: {
+  page: 1,
+  limit: 9,
+  search: '',
+  sortBy: 'created_at',
+  sortOrder: 'DESC',
+  statusFilter: 'all'
+}
+ POST /clients 200 in 410ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+🔍 Fetching clients with: {
+  page: 1,
+  limit: 9,
+  search: '',
+  sortBy: 'created_at',
+  sortOrder: 'DESC',
+  statusFilter: 'all'
+}
+ POST /clients 200 in 218ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+Error fetching projects: {
+  code: '42703',
+  details: null,
+  hint: null,
+  message: 'column projects.status does not exist'
+}
+Found 0 projects for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 3 supervisors for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 82 staff for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 1374ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 2332ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+Error fetching projects: {
+  code: '42703',
+  details: null,
+  hint: null,
+  message: 'column projects.status does not exist'
+}
+Found 0 projects for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 3 supervisors for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+Found 82 staff for client 40932f8c-a9b3-4a52-8ebb-766cc3b6b3df
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 1347ms
+🔑 Using Supabase with URL: https://aazufecyynwrvkxellgp.supabase.co
+🔑 Key type: SERVICE_ROLE (bypasses RLS)
+ POST /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 2091ms
+ ✓ Compiled in 631ms (921 modules)
+ ✓ Compiled /_not-found in 369ms (910 modules)
+ GET /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 404 in 477ms
+ GET /_next/static/media/e4af272ccee01ff0-s.p.woff2 404 in 42ms
+ GET /_next/static/css/app/layout.css?v=1765895673708 404 in 41ms
+ GET /_next/static/chunks/main-app.js?v=1765895673708 404 in 39ms
+ GET /_next/static/chunks/app-pages-internals.js 404 in 38ms
+ GET /clients/40932f8c-a9b3-4a52-8ebb-766cc3b6b3df 200 in 65ms
+ GET /_next/static/css/app/layout.css?v=1765895680064 404 in 61ms
+ GET /_next/static/media/e4af272ccee01ff0-s.p.woff2 404 in 65ms
+ GET /_next/static/chunks/main-app.js?v=1765895680064 404 in 63ms
+ GET /_next/static/chunks/app/(dashboard)/clients/%5Bid%5D/page.js 404 in 61ms
+ GET /_next/static/chunks/app-pages-internals.js 404 in 62ms
+ GET /_next/static/chunks/app/(dashboard)/layout.js 404 in 49ms
+ ⨯ Failed to generate static paths for /clients/[id]:
+Error: Cannot find module './vendor-chunks/next.js'
+Require stack:
+- /home/gunal/dev/Construction-Workforce/admin-portal/.next/server/webpack-runtime.js
+- /home/gunal/dev/Construction-Workforce/admin-portal/.next/server/app/(dashboard)/clients/[id]/page.js
+- /home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/require.js
+- /home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/load-components.js
+- /home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/build/utils.js
+- /home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/dev/static-paths-worker.js
+- /home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/compiled/jest-worker/processChild.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1134:15)
+    at /home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/require-hook.js:55:36
+    at Module._load (node:internal/modules/cjs/loader:975:27)
+    at Module.require (node:internal/modules/cjs/loader:1225:19)
+    at mod.require (/home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/require-hook.js:65:28)
+    at require (node:internal/modules/helpers:177:18)
+    at __webpack_require__.f.require (/home/gunal/dev/Construction-Workforce/admin-portal/.next/server/webpack-runtime.js:198:28)
+    at /home/gunal/dev/Construction-Workforce/admin-portal/.next/server/webpack-runtime.js:111:40
+    at Array.reduce (<anonymous>)
+    at __webpack_require__.e (/home/gunal/dev/Construction-Workforce/admin-portal/.next/server/webpack-runtime.js:110:67) {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '/home/gunal/dev/Construction-Workforce/admin-portal/.next/server/webpack-runtime.js',
+    '/home/gunal/dev/Construction-Workforce/admin-portal/.next/server/app/(dashboard)/clients/[id]/page.js',
+    '/home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/require.js',
+    '/home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/load-components.js',
+    '/home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/build/utils.js',
+    '/home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/server/dev/static-paths-worker.js',
+    '/home/gunal/dev/Construction-Workforce/admin-portal/node_modules/next/dist/compiled/jest-worker/processChild.js'
+  ]
+}
+ ✓ Compiled / in 253ms (563 modules)
+ GET / 200 in 388ms
+ GET /_next/static/css/app/layout.css?v=1765895686463 404 in 55ms
+ GET /_next/static/media/e4af272ccee01ff0-s.p.woff2 404 in 57ms
+ GET /_next/static/chunks/main-app.js?v=1765895686463 404 in 53ms
+ GET /_next/static/chunks/app-pages-internals.js 404 in 52ms
+ GET /_next/static/chunks/app/page.js 404 in 51ms
+ ○ Compiling /dashboard ...
+ ✓ Compiled /dashboard in 601ms (985 modules)
+ GET /dashboard 200 in 9937ms
+Error fetching dashboard data: {
+  response: { status: 500, data: { message: 'TypeError: fetch failed' } }
+}
+ ○ Compiling /_error ...
+ ✓ Compiled /_error in 1311ms (1208 modules)
+ GET / 404 in 1813ms
+ GET / 404 in 22ms
+ ✓ Compiled in 905ms (1164 modules)
+ ✓ Compiled in 449ms (1164 modules)

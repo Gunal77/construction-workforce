@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/utils/auth_error_handler.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../../data/models/notification_model.dart';
 import '../../data/datasources/notifications_remote_datasource.dart';
@@ -19,6 +20,16 @@ final notificationsProvider = FutureProvider<List<NotificationModel>>((ref) asyn
   } catch (e) {
     print('💥 Exception in notificationsProvider: $e');
     print('💥 Exception type: ${e.runtimeType}');
+    
+    // Check if it's an authentication error
+    if (AuthErrorHandler.isAuthenticationError(e)) {
+      print('🔐 Authentication error detected - clearing tokens');
+      final apiClient = ref.read(apiClientProvider);
+      await AuthErrorHandler.handleAuthError(apiClient);
+      // Invalidate auth state to trigger navigation to login
+      ref.invalidate(authStateProvider);
+    }
+    
     rethrow;
   }
 });

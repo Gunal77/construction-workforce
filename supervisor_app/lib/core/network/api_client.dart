@@ -60,6 +60,10 @@ class ApiClient {
             final message = error.response!.data?['message'] ?? 'Request failed';
 
             if (statusCode == 401) {
+              // Token expired or invalid - clear token
+              print('🔐 401 Unauthorized - Clearing token');
+              _clearTokenOnAuthErrorSync();
+              
               return handler.reject(
                 DioException(
                   requestOptions: error.requestOptions,
@@ -158,6 +162,17 @@ class ApiClient {
     _token = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(AppConstants.authTokenKey);
+  }
+
+  void _clearTokenOnAuthErrorSync() {
+    _token = null;
+    // Clear token synchronously - SharedPreferences operations will be queued
+    SharedPreferences.getInstance().then((prefs) async {
+      await prefs.remove(AppConstants.authTokenKey);
+      await prefs.remove(AppConstants.supervisorDataKey);
+      await prefs.setBool(AppConstants.isLoggedInKey, false);
+      print('🔐 Token cleared due to authentication error');
+    });
   }
 
   Future<Response<T>> get<T>(
