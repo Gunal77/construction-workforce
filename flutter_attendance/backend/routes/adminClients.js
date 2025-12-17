@@ -20,24 +20,9 @@ router.get('/', async (req, res) => {
         u.phone,
         COALESCE(u.is_active, TRUE) as is_active,
         u.created_at,
-<<<<<<< HEAD
-        (SELECT COUNT(*) FROM projects WHERE client_user_id = u.id) as project_count,
-        (SELECT COUNT(DISTINCT s.id) 
-         FROM supervisors s
-         INNER JOIN supervisor_projects_relation spr ON spr.supervisor_id = s.id
-         INNER JOIN projects p ON p.id = spr.project_id
-         WHERE p.client_user_id = u.id) as supervisor_count,
-        (SELECT COUNT(DISTINCT COALESCE(s.id, e.id))
-         FROM projects p
-         LEFT JOIN staffs s ON s.project_id = p.id
-         LEFT JOIN employees e ON e.project_id = p.id
-         WHERE p.client_user_id = u.id
-           AND (s.id IS NOT NULL OR e.id IS NOT NULL)) as staff_count
-=======
         COALESCE((SELECT COUNT(*) FROM projects WHERE client_user_id = u.id), 0) as project_count,
         COALESCE((SELECT COUNT(*) FROM supervisors WHERE client_user_id = u.id), 0) as supervisor_count,
         COALESCE((SELECT COUNT(*) FROM employees WHERE client_user_id = u.id), 0) as staff_count
->>>>>>> a4f152ed4e64e77634119230cc2b7debffcfc50e
       FROM users u
       WHERE u.role = 'client'
     `;
@@ -102,63 +87,6 @@ router.get('/:id', async (req, res) => {
       });
     }
     
-<<<<<<< HEAD
-    // Fetch related data
-    // Get projects for this client
-    const projectsQuery = `
-      SELECT id, name, location, start_date, end_date, description, budget, created_at
-      FROM projects
-      WHERE client_user_id = $1
-      ORDER BY created_at DESC
-    `;
-    const projects = await pool.query(projectsQuery, [id]);
-    
-    // Get supervisors assigned to client's projects
-    const supervisorsQuery = `
-      SELECT DISTINCT
-        s.id,
-        s.name,
-        s.email,
-        s.phone,
-        s.created_at
-      FROM supervisors s
-      INNER JOIN supervisor_projects_relation spr ON spr.supervisor_id = s.id
-      INNER JOIN projects p ON p.id = spr.project_id
-      WHERE p.client_user_id = $1
-      ORDER BY s.name
-    `;
-    const supervisors = await pool.query(supervisorsQuery, [id]);
-    
-    // Get staff assigned to client's projects (from staffs table, fallback to employees if staffs is empty)
-    const staffQuery = `
-      SELECT 
-        s.id,
-        s.name,
-        s.email,
-        s.phone,
-        s.role,
-        s.project_id,
-        s.created_at
-      FROM staffs s
-      INNER JOIN projects p ON p.id = s.project_id
-      WHERE p.client_user_id = $1
-      UNION
-      SELECT 
-        e.id,
-        e.name,
-        e.email,
-        e.phone,
-        e.role,
-        e.project_id,
-        e.created_at
-      FROM employees e
-      INNER JOIN projects p ON p.id = e.project_id
-      WHERE p.client_user_id = $1
-        AND NOT EXISTS (SELECT 1 FROM staffs WHERE id = e.id)
-      ORDER BY name
-    `;
-    const staff = await pool.query(staffQuery, [id]);
-=======
     // Fetch associated projects - ONLY for this specific client
     const projects = await pool.query(
       `SELECT id, name, location, start_date, end_date, budget, created_at, description, client_user_id
@@ -192,7 +120,6 @@ router.get('/:id', async (req, res) => {
     );
     
     console.log(`[Client ${id}] Found ${staff.rows.length} staff members assigned to this client`);
->>>>>>> a4f152ed4e64e77634119230cc2b7debffcfc50e
     
     res.json({
       success: true,
@@ -522,28 +449,6 @@ router.get('/:id/stats', async (req, res) => {
       });
     }
     
-<<<<<<< HEAD
-    // Get real stats
-    const statsQuery = `
-      SELECT 
-        (SELECT COUNT(*) FROM projects WHERE client_user_id = $1) as total_projects,
-        (SELECT COUNT(*) FROM projects WHERE client_user_id = $1 AND (end_date IS NULL OR end_date >= CURRENT_DATE)) as active_projects,
-        (SELECT COUNT(DISTINCT s.id) 
-         FROM supervisors s
-         INNER JOIN supervisor_projects_relation spr ON spr.supervisor_id = s.id
-         INNER JOIN projects p ON p.id = spr.project_id
-         WHERE p.client_user_id = $1) as total_supervisors,
-        (SELECT COUNT(DISTINCT COALESCE(s.id, e.id))
-         FROM projects p
-         LEFT JOIN staffs s ON s.project_id = p.id
-         LEFT JOIN employees e ON e.project_id = p.id AND NOT EXISTS (SELECT 1 FROM staffs WHERE id = e.id)
-         WHERE p.client_user_id = $1) as total_staff,
-        (SELECT COUNT(DISTINCT COALESCE(s.id, e.id))
-         FROM projects p
-         LEFT JOIN staffs s ON s.project_id = p.id AND s.project_id IS NOT NULL
-         LEFT JOIN employees e ON e.project_id = p.id AND e.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM staffs WHERE id = e.id)
-         WHERE p.client_user_id = $1) as assigned_staff
-=======
     // Get actual client statistics
     const statsQuery = `
       SELECT 
@@ -552,7 +457,6 @@ router.get('/:id/stats', async (req, res) => {
         COALESCE((SELECT COUNT(*) FROM supervisors WHERE client_user_id = $1), 0) as total_supervisors,
         COALESCE((SELECT COUNT(*) FROM employees WHERE client_user_id = $1), 0) as total_staff,
         COALESCE((SELECT COUNT(*) FROM employees WHERE client_user_id = $1 AND project_id IS NOT NULL), 0) as assigned_staff
->>>>>>> a4f152ed4e64e77634119230cc2b7debffcfc50e
     `;
     
     const result = await pool.query(statsQuery, [id]);
