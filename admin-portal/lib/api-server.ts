@@ -19,9 +19,9 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  // Add timeout to prevent hanging
+  // Add timeout to prevent hanging - reduced for faster response
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+  const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
 
   try {
     const response = await fetch(`${API_BASE_URL}${url}`, {
@@ -109,6 +109,11 @@ export const serverAPI = {
     },
     getById: async (id: string) => {
       return fetchWithAuth(`/api/admin/projects/${id}`);
+    },
+  },
+  supervisors: {
+    getAll: async () => {
+      return fetchWithAuth('/api/admin/supervisors');
     },
   },
 };

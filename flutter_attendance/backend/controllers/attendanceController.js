@@ -188,6 +188,11 @@ const getAllAttendance = async (req, res) => {
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    // Add LIMIT for dashboard queries to improve performance
+    // If no date filter, limit to last 30 days for dashboard performance
+    const hasDateFilter = req.query.date || req.query.from || req.query.to || req.query.month || req.query.year;
+    const limitClause = hasDateFilter ? '' : 'LIMIT 1000'; // Limit to 1000 records if no date filter
+
     const query = `
       SELECT
         al.id,
@@ -202,6 +207,7 @@ const getAllAttendance = async (req, res) => {
       LEFT JOIN users u ON u.id = al.user_id
       ${whereClause}
       ORDER BY ${orderColumn} ${normalizedSortOrder}, al.created_at ${normalizedSortOrder}
+      ${limitClause}
     `;
 
     const { rows } = await db.query(query, values);

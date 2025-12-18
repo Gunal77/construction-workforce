@@ -65,8 +65,9 @@ router.get('/', async (req, res) => {
 
     const projectIds = projects.map(p => p.id);
 
-    // Get all employees assigned to these projects
-    const { data: employees, error: employeesError } = await supabase
+    // Get all employees assigned to these projects (from both direct assignment and project_employees table)
+    // First, get employees with direct project_id assignment
+    const { data: directEmployees, error: directError } = await supabase
       .from('employees')
       .select(`
         id,
@@ -85,23 +86,87 @@ router.get('/', async (req, res) => {
       .in('project_id', projectIds)
       .order('name', { ascending: true });
 
-    if (employeesError) {
-      console.error('Error fetching staff:', employeesError);
-      return res.status(500).json({ message: 'Failed to fetch staff' });
+    if (directError) {
+      console.error('Error fetching direct employees:', directError);
     }
 
-    // Format the response
-    const staffs = (employees || []).map(employee => ({
-      id: employee.id,
-      name: employee.name,
-      email: employee.email,
-      phone: employee.phone,
-      role: employee.role,
-      project_id: employee.project_id,
-      project_name: employee.projects?.name || 'No Project',
-      project_location: employee.projects?.location || null,
-      created_at: employee.created_at,
-    }));
+    // Get employees from project_employees table
+    const { data: projectEmployees, error: projectEmployeesError } = await supabase
+      .from('project_employees')
+      .select(`
+        employee_id,
+        project_id,
+        assignment_start_date,
+        assignment_end_date,
+        employees:employee_id (
+          id,
+          name,
+          email,
+          phone,
+          role,
+          created_at
+        ),
+        projects:project_id (
+          id,
+          name,
+          location
+        )
+      `)
+      .in('project_id', projectIds)
+      .eq('status', 'active')
+      .order('assignment_start_date', { ascending: false });
+
+    if (projectEmployeesError) {
+      console.error('Error fetching project employees:', projectEmployeesError);
+    }
+
+    // Combine employees from both sources
+    const employeeMap = new Map();
+
+    // Add direct employees
+    (directEmployees || []).forEach(employee => {
+      if (employee.project_id && projectIds.includes(employee.project_id)) {
+        employeeMap.set(`${employee.id}-${employee.project_id}`, {
+          id: employee.id,
+          name: employee.name,
+          email: employee.email,
+          phone: employee.phone,
+          role: employee.role,
+          project_id: employee.project_id,
+          project_name: employee.projects?.name || 'No Project',
+          project_location: employee.projects?.location || null,
+          created_at: employee.created_at,
+        });
+      }
+    });
+
+    // Add employees from project_employees table
+    (projectEmployees || []).forEach(relation => {
+      const employee = relation.employees;
+      const project = relation.projects;
+      
+      // Double-check: ensure project belongs to this client
+      if (employee && project && projectIds.includes(project.id)) {
+        const key = `${employee.id}-${project.id}`;
+        // Only add if not already added (prefer direct assignment if exists)
+        if (!employeeMap.has(key)) {
+          employeeMap.set(key, {
+            id: employee.id,
+            name: employee.name,
+            email: employee.email,
+            phone: employee.phone,
+            role: employee.role,
+            project_id: project.id,
+            project_name: project.name || 'No Project',
+            project_location: project.location || null,
+            created_at: employee.created_at,
+          });
+        }
+      }
+    });
+
+    // Convert map to array
+    const staffs = Array.from(employeeMap.values());
 
     return res.json({ 
       staffs: staffs || [],

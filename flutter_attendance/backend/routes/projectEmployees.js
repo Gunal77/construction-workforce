@@ -549,5 +549,46 @@ router.get('/:projectId/employees/history', adminAuthMiddleware, async (req, res
   }
 });
 
+// GET /api/admin/projects/assignments/all - Get all active project assignments
+router.get('/assignments/all', adminAuthMiddleware, async (req, res) => {
+  try {
+    // Fetch all active project assignments with employee details
+    const { data: assignments, error } = await supabase
+      .from('project_employees')
+      .select(`
+        project_id,
+        employee_id,
+        assignment_start_date,
+        assignment_end_date,
+        status,
+        employees:employee_id (
+          id,
+          email
+        )
+      `)
+      .eq('status', 'active')
+      .is('revoked_at', null);
+
+    if (error) {
+      console.error('Error fetching all project assignments:', error);
+      return res.status(500).json({ message: 'Failed to fetch project assignments' });
+    }
+
+    // Transform to a simpler structure
+    const assignmentsMap = (assignments || []).map(assignment => ({
+      project_id: assignment.project_id,
+      employee_id: assignment.employee_id,
+      employee_email: assignment.employees?.email,
+      assignment_start_date: assignment.assignment_start_date,
+      assignment_end_date: assignment.assignment_end_date,
+    }));
+
+    return res.json({ assignments: assignmentsMap });
+  } catch (err) {
+    console.error('Get all assignments error:', err);
+    return res.status(500).json({ message: 'Error fetching project assignments' });
+  }
+});
+
 module.exports = router;
 

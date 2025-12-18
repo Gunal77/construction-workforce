@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
 
     // Call backend directly with timeout for faster response
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout for faster feedback
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/admin/auth/login`, {

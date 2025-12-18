@@ -7,7 +7,7 @@ import Modal from '@/components/Modal';
 import StatCard from '@/components/StatCard';
 import Input from '@/components/Input';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Plus, Search, CheckCircle2, XCircle, Calendar } from 'lucide-react';
+import { Plus, Search, CheckCircle2, XCircle, Calendar, Image, MapPin, Eye } from 'lucide-react';
 import { lastEndDateAPI } from '@/lib/api';
 import LastEndDateBadge from '@/components/LastEndDateBadge';
 import Pagination from '@/components/Pagination';
@@ -27,6 +27,7 @@ export default function AttendancePage() {
   const [employeeFilter, setEmployeeFilter] = useState('');
   const [lastEndDates, setLastEndDates] = useState<Record<string, string | null>>({});
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
   // Form state for manual attendance
   const [formData, setFormData] = useState({
@@ -38,46 +39,41 @@ export default function AttendancePage() {
   });
 
   useEffect(() => {
-    fetchWorkers();
-    fetchProjects();
-    fetchAttendance();
-    fetchLastEndDates();
+    // Fetch all data in parallel for faster loading
+    const loadData = async () => {
+      await Promise.all([
+        fetchWorkers(), // This now handles last end dates internally
+        fetchProjects(),
+        fetchAttendance(),
+      ]);
+    };
+    loadData();
   }, []);
 
-  const fetchLastEndDates = async () => {
-    try {
-      if (workers.length === 0) return;
-      
-      const employeeIds = workers.map(w => w.id);
-      const response = await lastEndDateAPI.getAll({ employeeIds });
-      const datesMap: Record<string, string | null> = {};
-      
-      (response.lastEndDates || []).forEach((item: any) => {
-        // Map by employee_id from response
-        datesMap[item.employee_id] = item.last_end_date;
-      });
-      
-      setLastEndDates(datesMap);
-    } catch (err: any) {
-      console.error('Error fetching last end dates:', err);
-    }
-  };
 
   useEffect(() => {
     fetchAttendance();
     setCurrentPage(1); // Reset to first page when filters change
   }, [statusFilter, projectFilter, employeeFilter]);
 
-  useEffect(() => {
-    if (workers.length > 0) {
-      fetchLastEndDates();
-    }
-  }, [workers]);
-
   const fetchWorkers = async () => {
     try {
       const response = await employeesAPI.getAll();
-      setWorkers(response.employees || []);
+      const fetchedWorkers = response.employees || [];
+      setWorkers(fetchedWorkers);
+      // Fetch last end dates immediately after workers are loaded
+      if (fetchedWorkers.length > 0) {
+        const employeeIds = fetchedWorkers.map(w => w.id);
+        lastEndDateAPI.getAll({ employeeIds }).then(response => {
+          const datesMap: Record<string, string | null> = {};
+          (response.lastEndDates || []).forEach((item: any) => {
+            datesMap[item.employee_id] = item.last_end_date;
+          });
+          setLastEndDates(datesMap);
+        }).catch(err => {
+          console.error('Error fetching last end dates:', err);
+        });
+      }
     } catch (err: any) {
       console.error('Error fetching workers:', err);
     }
@@ -100,11 +96,12 @@ export default function AttendancePage() {
         sortOrder: 'desc',
       };
 
-      // Show records from the last 7 days by default instead of just today
-      // This ensures users see data even if there's no attendance today
-      // You can uncomment the line below to filter by today only:
-      // const today = new Date().toISOString().split('T')[0];
-      // params.date = today;
+      // Show records from the last 30 days by default for faster loading
+      // Users can still see recent data without loading thousands of records
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      params.from = thirtyDaysAgo.toISOString().split('T')[0];
+      params.to = new Date().toISOString().split('T')[0];
 
       const response = await attendanceAPI.getAll(params);
       setAttendanceRecords(response.records || []);
@@ -320,6 +317,68 @@ export default function AttendancePage() {
         const worker = workers.find((w) => w.id === item.user_id);
         const lastEndDate = worker ? lastEndDates[worker.id] : null;
         return <LastEndDateBadge lastEndDate={lastEndDate} />;
+      },
+    },
+    {
+      key: 'image',
+      header: 'Image',
+      render: (item: AttendanceRecord) => {
+        if (!item.image_url) {
+          return <span className="text-gray-400 text-sm">-</span>;
+        }
+        return (
+          <button
+            onClick={() => setSelectedImage(item.image_url || null)}
+            className="flex items-center justify-center w-12 h-12 rounded-lg border border-gray-200 hover:border-primary-300 hover:shadow-sm transition-all overflow-hidden bg-gray-50 group"
+            title="Click to view image"
+          >
+            <img
+              src={item.image_url}
+              alt="Check-in photo"
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+              onError={(e) => {
+                const img = e.target as HTMLImageElement;
+                img.style.display = 'none';
+                const parent = img.parentElement;
+                if (parent) {
+                  parent.innerHTML = '<div class="flex items-center justify-center w-full h-full"><svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg></div>';
+                }
+              }}
+            />
+          </button>
+        );
+      },
+    },
+    {
+      key: 'location',
+      header: 'Location',
+      render: (item: AttendanceRecord) => {
+        if (!item.latitude || !item.longitude) {
+          return <span className="text-gray-400 text-sm">-</span>;
+        }
+        return (
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-xs text-gray-700">
+              <MapPin className="h-3 w-3 text-primary-600" />
+              <span className="font-medium">Lat:</span>
+              <span>{item.latitude.toFixed(6)}</span>
+            </div>
+            <div className="flex items-center gap-1 text-xs text-gray-700">
+              <MapPin className="h-3 w-3 text-primary-600" />
+              <span className="font-medium">Lng:</span>
+              <span>{item.longitude.toFixed(6)}</span>
+            </div>
+            <a
+              href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary-600 hover:text-primary-700 hover:underline flex items-center gap-1"
+            >
+              <Eye className="h-3 w-3" />
+              View on Map
+            </a>
+          </div>
+        );
       },
     },
   ];
@@ -591,6 +650,41 @@ export default function AttendancePage() {
           </div>
         </form>
       </Modal>
+
+      {/* Image Viewer Modal */}
+      {selectedImage && (
+        <Modal
+          isOpen={!!selectedImage}
+          onClose={() => setSelectedImage(null)}
+          title="Check-In Photo"
+          size="lg"
+        >
+          <div className="space-y-4">
+            <div className="relative w-full h-auto max-h-[70vh] overflow-hidden rounded-lg bg-gray-100">
+              <img
+                src={selectedImage}
+                alt="Check-in photo"
+                className="w-full h-auto object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  const parent = (e.target as HTMLImageElement).parentElement;
+                  if (parent) {
+                    parent.innerHTML = '<div class="flex items-center justify-center w-full h-64 text-gray-400"><div class="text-center"><p>Failed to load image</p></div></div>';
+                  }
+                }}
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setSelectedImage(null)}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

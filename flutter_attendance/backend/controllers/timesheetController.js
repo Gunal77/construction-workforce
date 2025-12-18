@@ -82,6 +82,22 @@ const getTimesheets = async (req, res) => {
     // Order by date descending
     query += ' ORDER BY t.work_date DESC, t.created_at DESC';
     
+    // Add default limit if no date filter (prevent loading too many records)
+    // If date filters are provided, allow more records, otherwise limit to recent 500
+    if (!startDate && !endDate) {
+      query += ' LIMIT 500';
+    } else {
+      // If date range is more than 90 days, limit to 1000 records
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        if (daysDiff > 90) {
+          query += ' LIMIT 1000';
+        }
+      }
+    }
+    
     const { rows } = await db.query(query, values);
     
     return res.json({ timesheets: rows });
@@ -164,6 +180,35 @@ const createTimesheet = async (req, res) => {
     if (workDateObj > today) {
       return res.status(400).json({ message: 'Cannot create timesheet for future dates' });
     }
+
+    // Validate project assignment if project is provided
+    if (finalProjectId) {
+      // Check if employee is assigned to this project on the work date
+      const { rows: assignmentCheck } = await db.query(
+        `SELECT id FROM project_employees 
+         WHERE employee_id = $1 
+         AND project_id = $2 
+         AND status = 'active'
+         AND (assignment_start_date IS NULL OR assignment_start_date <= $3)
+         AND (assignment_end_date IS NULL OR assignment_end_date >= $3)
+         LIMIT 1`,
+        [finalStaffId, finalProjectId, finalWorkDate]
+      );
+
+      // If not found in project_employees, check direct project_id in employees table
+      if (assignmentCheck.length === 0) {
+        const { rows: directCheck } = await db.query(
+          `SELECT id FROM employees WHERE id = $1 AND project_id = $2 LIMIT 1`,
+          [finalStaffId, finalProjectId]
+        );
+
+        if (directCheck.length === 0) {
+          return res.status(400).json({ 
+            message: 'Employee is not assigned to this project on the selected date' 
+          });
+        }
+      }
+    }
     
     const adminId = req.admin?.id;
     
@@ -244,7 +289,7 @@ const updateTimesheet = async (req, res) => {
     
     // Check if timesheet exists and is not approved
     const { rows: existing } = await db.query(
-      'SELECT approval_status FROM timesheets WHERE id = $1',
+      'SELECT approval_status, staff_id, work_date FROM timesheets WHERE id = $1',
       [id]
     );
     
@@ -254,6 +299,38 @@ const updateTimesheet = async (req, res) => {
     
     if (existing[0].approval_status === 'Approved') {
       return res.status(400).json({ message: 'Cannot edit approved timesheet' });
+    }
+
+    // Validate project assignment if project is provided
+    if (finalProjectId) {
+      const staffId = existing[0].staff_id;
+      const workDate = finalWorkDate || existing[0].work_date;
+      
+      // Check if employee is assigned to this project on the work date
+      const { rows: assignmentCheck } = await db.query(
+        `SELECT id FROM project_employees 
+         WHERE employee_id = $1 
+         AND project_id = $2 
+         AND status = 'active'
+         AND (assignment_start_date IS NULL OR assignment_start_date <= $3)
+         AND (assignment_end_date IS NULL OR assignment_end_date >= $3)
+         LIMIT 1`,
+        [staffId, finalProjectId, workDate]
+      );
+
+      // If not found in project_employees, check direct project_id in employees table
+      if (assignmentCheck.length === 0) {
+        const { rows: directCheck } = await db.query(
+          `SELECT id FROM employees WHERE id = $1 AND project_id = $2 LIMIT 1`,
+          [staffId, finalProjectId]
+        );
+
+        if (directCheck.length === 0) {
+          return res.status(400).json({ 
+            message: 'Employee is not assigned to this project on the selected date' 
+          });
+        }
+      }
     }
     
     // Build update query dynamically

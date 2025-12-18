@@ -58,10 +58,11 @@ export default function ProjectDetailsPage() {
   const isAdmin = userRole === 'admin';
 
   useEffect(() => {
-    fetchUserRole();
-    if (projectId) {
-      fetchProjectData();
-    }
+    // Fetch user role and project data in parallel
+    Promise.all([
+      fetchUserRole(),
+      projectId ? fetchProjectData() : Promise.resolve(),
+    ]);
   }, [projectId]);
 
   useEffect(() => {
@@ -92,46 +93,55 @@ export default function ProjectDetailsPage() {
       setError('');
       setSuccess('');
 
-      // Fetch project data
-      const projectRes = await projectsAPI.getById(projectId);
-      if (projectRes.project) {
-        setProject(projectRes.project);
+      // Fetch all data in parallel for maximum performance
+      const [projectRes, staffsRes, allStaffsRes, supervisorsRes] = await Promise.allSettled([
+        projectsAPI.getById(projectId),
+        projectsAPI.getProjectStaffs(projectId),
+        employeesAPI.getAll(),
+        projectsAPI.getSupervisors(),
+      ]);
+
+      // Handle project data
+      if (projectRes.status === 'fulfilled' && projectRes.value.project) {
+        const projectData = projectRes.value.project;
+        setProject(projectData);
         
-        // Fetch client if available
-        if (projectRes.project.client_user_id) {
-          try {
-            const clientRes = await getClientById(projectRes.project.client_user_id);
+        // Fetch client in parallel (non-blocking)
+        if (projectData.client_user_id) {
+          getClientById(projectData.client_user_id).then(clientRes => {
             if (clientRes.success && clientRes.data) {
               setClient(clientRes.data);
             }
-          } catch (err) {
+          }).catch(err => {
             console.error('Error fetching client:', err);
-          }
+          });
+        }
+
+        // Set supervisor info
+        if (projectData.supervisor_id) {
+          setCurrentSupervisorId(projectData.supervisor_id);
+          setSelectedSupervisorId(projectData.supervisor_id);
+        } else {
+          setCurrentSupervisorId(null);
+          setSelectedSupervisorId('');
         }
       }
 
-      // Fetch assigned staffs
-      const staffsRes = await projectsAPI.getProjectStaffs(projectId);
-      setAssignedStaffs(staffsRes.staffs || []);
-      setSelectedStaffIds((staffsRes.staffs || []).map((s: Employee) => s.id));
+      // Handle staffs
+      if (staffsRes.status === 'fulfilled') {
+        const staffs = staffsRes.value.staffs || [];
+        setAssignedStaffs(staffs);
+        setSelectedStaffIds(staffs.map((s: Employee) => s.id));
+      }
 
-      // Fetch all staffs
-      const allStaffsRes = await employeesAPI.getAll();
-      setAllStaffs(allStaffsRes.employees || []);
+      // Handle all staffs
+      if (allStaffsRes.status === 'fulfilled') {
+        setAllStaffs(allStaffsRes.value.employees || []);
+      }
 
-      // Fetch supervisors
-      setLoadingSupervisors(true);
-      const supervisorsRes = await projectsAPI.getSupervisors();
-      setSupervisors(supervisorsRes.supervisors || []);
-
-      // Get updated project data for supervisor
-      const updatedProject = projectRes.project || project;
-      if (updatedProject?.supervisor_id) {
-        setCurrentSupervisorId(updatedProject.supervisor_id);
-        setSelectedSupervisorId(updatedProject.supervisor_id);
-      } else {
-        setCurrentSupervisorId(null);
-        setSelectedSupervisorId('');
+      // Handle supervisors
+      if (supervisorsRes.status === 'fulfilled') {
+        setSupervisors(supervisorsRes.value.supervisors || []);
       }
     } catch (err: any) {
       console.error('Error fetching project data:', err);
@@ -204,9 +214,14 @@ export default function ProjectDetailsPage() {
 
   const handleAssignSupervisor = async () => {
     if (!project || !isAdmin) return;
+    
+    // Don't proceed if no change
+    if (selectedSupervisorId === currentSupervisorId) {
+      return;
+    }
 
     try {
-      setLoading(true);
+      setLoadingSupervisors(true);
       setError('');
       setSuccess('');
 
@@ -220,13 +235,29 @@ export default function ProjectDetailsPage() {
       if (!response.ok) {
         throw { response: { status: response.status, data } };
       }
+      
       setSuccess(selectedSupervisorId ? 'Supervisor assigned successfully' : 'Supervisor removed successfully');
+      
+      // Update state immediately for better UX
+      if (selectedSupervisorId) {
+        setCurrentSupervisorId(selectedSupervisorId);
+        setSelectedSupervisorId(selectedSupervisorId);
+      } else {
+        setCurrentSupervisorId(null);
+        setSelectedSupervisorId('');
+      }
 
-      await fetchProjectData();
+      // Refresh project data to ensure consistency (with a small delay to allow backend to update)
+      setTimeout(async () => {
+        await fetchProjectData();
+      }, 500);
     } catch (err: any) {
+      console.error('Error assigning supervisor:', err);
       setError(err.response?.data?.message || 'Failed to assign supervisor');
+      // Revert selection on error
+      setSelectedSupervisorId(currentSupervisorId || '');
     } finally {
-      setLoading(false);
+      setLoadingSupervisors(false);
     }
   };
 
@@ -664,10 +695,10 @@ export default function ProjectDetailsPage() {
                 {isAdmin && (
                   <button
                     onClick={handleAssignSupervisor}
-                    disabled={loading || selectedSupervisorId === currentSupervisorId}
+                    disabled={loadingSupervisors || selectedSupervisorId === currentSupervisorId || !selectedSupervisorId}
                     className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                   >
-                    {loading ? (
+                    {loadingSupervisors ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
                         <span>Saving...</span>
@@ -692,23 +723,31 @@ export default function ProjectDetailsPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <h4 className="text-sm font-semibold text-blue-900 mb-1">Currently Assigned Supervisor</h4>
-                      {supervisors.find((s) => s.id === currentSupervisorId) && (
-                        <div className="mt-2">
-                          <p className="text-sm font-medium text-gray-900">
-                            {supervisors.find((s) => s.id === currentSupervisorId)?.name}
-                          </p>
-                          <p className="text-xs text-gray-600">
-                            {supervisors.find((s) => s.id === currentSupervisorId)?.email}
-                          </p>
-                        </div>
-                      )}
+                      {(() => {
+                        const assignedSupervisor = supervisors.find((s) => s.id === currentSupervisorId);
+                        return assignedSupervisor ? (
+                          <div className="mt-2">
+                            <p className="text-sm font-medium text-gray-900">
+                              {assignedSupervisor.name}
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              {assignedSupervisor.email}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-2">
+                            <p className="text-sm text-gray-500 italic">Supervisor ID: {currentSupervisorId}</p>
+                            <p className="text-xs text-gray-400">Loading details...</p>
+                          </div>
+                        );
+                      })()}
                     </div>
                     {isAdmin && (
                       <button
                         onClick={async () => {
                           if (!project || !isAdmin) return;
                           try {
-                            setLoading(true);
+                            setLoadingSupervisors(true);
                             setError('');
                             setSuccess('');
                             
@@ -724,15 +763,17 @@ export default function ProjectDetailsPage() {
                             }
                             setSuccess('Supervisor removed successfully');
                             setSelectedSupervisorId('');
+                            setCurrentSupervisorId(null);
                             await fetchProjectData();
                           } catch (err: any) {
+                            console.error('Error removing supervisor:', err);
                             setError(err.response?.data?.message || 'Failed to remove supervisor');
                           } finally {
-                            setLoading(false);
+                            setLoadingSupervisors(false);
                           }
                         }}
-                        disabled={loading}
-                        className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
+                        disabled={loadingSupervisors}
+                        className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
                         title="Remove supervisor"
                       >
                         <X className="h-4 w-4" />

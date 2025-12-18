@@ -12,11 +12,43 @@ import PendingLeaveRequestsBanner from '@/components/PendingLeaveRequestsBanner'
 
 async function getDashboardData() {
   try {
-    // Use Promise.allSettled to handle individual failures gracefully
-    const [employeesRes, attendanceRes, projectsRes] = await Promise.allSettled([
+    // Get auth token once
+    const cookieStore = await import('next/headers').then(m => m.cookies());
+    const token = cookieStore.get('auth_token')?.value;
+    const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+
+    // Make ALL API calls in parallel for maximum performance
+    const [employeesRes, attendanceRes, projectsRes, supervisorsRes, leaveStatsRes, timesheetStatsRes] = await Promise.allSettled([
       serverAPI.employees.getAll(),
-      serverAPI.attendance.getAll({ sortBy: 'check_in_time', sortOrder: 'desc' }),
+      // Fetch last 30 days of attendance for accurate performance overview calculation
+      serverAPI.attendance.getAll({ 
+        sortBy: 'check_in_time', 
+        sortOrder: 'desc',
+        from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        to: new Date().toISOString().split('T')[0],
+      }),
       serverAPI.projects.getAll(),
+      serverAPI.supervisors.getAll(),
+      // Fetch leave stats in parallel with timeout (using Promise.race for server-side)
+      token ? Promise.race([
+        fetch(`${apiUrl}/api/leave/admin/statistics`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }).then(r => r.ok ? r.json() : { pendingCount: 0 }).catch(() => ({ pendingCount: 0 })),
+        new Promise(resolve => setTimeout(() => resolve({ pendingCount: 0 }), 3000))
+      ]) : Promise.resolve({ pendingCount: 0 }),
+      // Fetch timesheet stats in parallel with timeout
+      token ? Promise.race([
+        fetch(`${apiUrl}/api/timesheets/stats`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }).then(r => r.ok ? r.json() : { todayTotalOT: 0, pendingTimesheetApprovals: 0, pendingOTApprovals: 0 }).catch(() => ({ todayTotalOT: 0, pendingTimesheetApprovals: 0, pendingOTApprovals: 0 })),
+        new Promise(resolve => setTimeout(() => resolve({ todayTotalOT: 0, pendingTimesheetApprovals: 0, pendingOTApprovals: 0 }), 3000))
+      ]) : Promise.resolve({ todayTotalOT: 0, pendingTimesheetApprovals: 0, pendingOTApprovals: 0 }),
     ]);
 
     // Extract data from settled promises, with fallbacks
@@ -29,6 +61,12 @@ async function getDashboardData() {
     const projectsResData = projectsRes.status === 'fulfilled' 
       ? projectsRes.value 
       : { projects: [] };
+    const supervisorsResData = supervisorsRes.status === 'fulfilled' 
+      ? supervisorsRes.value 
+      : { supervisors: [] };
+    
+    const leaveStats = leaveStatsRes.status === 'fulfilled' ? leaveStatsRes.value : { pendingCount: 0 };
+    const timesheetStats = timesheetStatsRes.status === 'fulfilled' ? timesheetStatsRes.value : { todayTotalOT: 0, pendingTimesheetApprovals: 0, pendingOTApprovals: 0 };
 
     // Log errors if any requests failed
     if (employeesRes.status === 'rejected') {
@@ -40,60 +78,22 @@ async function getDashboardData() {
     if (projectsRes.status === 'rejected') {
       console.error('Error fetching projects:', projectsRes.reason);
     }
-
-    // Fetch leave statistics for pending requests count
-    let pendingLeaveRequests = 0;
-    try {
-      const cookieStore = await import('next/headers').then(m => m.cookies());
-      const token = cookieStore.get('auth_token')?.value;
-      if (token) {
-        const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
-        const leaveStatsRes = await fetch(`${apiUrl}/api/leave/admin/statistics`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (leaveStatsRes.ok) {
-          const leaveStats = await leaveStatsRes.json();
-          pendingLeaveRequests = leaveStats.pendingCount || 0;
-        }
-      }
-    } catch (err) {
-      // Silently fail if leave API is not available
-      console.error('Error fetching leave stats:', err);
+    if (supervisorsRes.status === 'rejected') {
+      console.error('Error fetching supervisors:', supervisorsRes.reason);
+    }
+    if (timesheetStatsRes.status === 'rejected') {
+      console.error('Error fetching timesheet stats:', timesheetStatsRes.reason);
     }
 
-    // Fetch timesheet statistics
-    let todayTotalOT = 0;
-    let pendingTimesheetApprovals = 0;
-    let pendingOTApprovals = 0;
-    try {
-      const cookieStore = await import('next/headers').then(m => m.cookies());
-      const token = cookieStore.get('auth_token')?.value;
-      if (token) {
-        const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
-        const timesheetStatsRes = await fetch(`${apiUrl}/api/timesheets/stats`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (timesheetStatsRes.ok) {
-          const timesheetStats = await timesheetStatsRes.json();
-          todayTotalOT = timesheetStats.todayTotalOT || 0;
-          pendingTimesheetApprovals = timesheetStats.pendingTimesheetApprovals || 0;
-          pendingOTApprovals = timesheetStats.pendingOTApprovals || 0;
-        }
-      }
-    } catch (err) {
-      // Silently fail if timesheet API is not available
-      console.error('Error fetching timesheet stats:', err);
-    }
+    const pendingLeaveRequests = leaveStats.pendingCount || 0;
+    const todayTotalOT = timesheetStats.todayTotalOT || 0;
+    const pendingTimesheetApprovals = timesheetStats.pendingTimesheetApprovals || 0;
+    const pendingOTApprovals = timesheetStats.pendingOTApprovals || 0;
 
     const employees = employeesResData.employees || [];
     const attendanceRecords = attendanceResData.records || [];
     const projects = projectsResData.projects || [];
+    const supervisors = supervisorsResData.supervisors || [];
 
     const today = new Date().toISOString().split('T')[0];
     const todayRecords = attendanceRecords.filter((record: AttendanceRecord) => {
@@ -109,23 +109,22 @@ async function getDashboardData() {
     const absentToday = employees.length - presentToday;
     const recentActivity = attendanceRecords.slice(0, 10);
 
-    // Calculate supervisors (workers with role containing "supervisor" or similar)
-    const supervisors = employees.filter((emp: Employee) =>
-      emp.role?.toLowerCase().includes('supervisor') || 
-      emp.role?.toLowerCase().includes('super')
-    ).length;
+    // Calculate supervisors count from supervisors API
+    const supervisorsCount = supervisors.length;
 
     // Calculate completed projects
     const completedProjects = projects.filter((p: any) => 
       p.end_date && new Date(p.end_date) <= new Date()
     ).length;
 
-    // Calculate on hold projects (if status field exists)
-    const onHoldProjects = 0; // Not available in current API
+    // Calculate on hold projects (check status field)
+    const onHoldProjects = projects.filter((p: any) => 
+      p.status && (p.status.toLowerCase() === 'on_hold' || p.status.toLowerCase() === 'on hold' || p.status === 'ON HOLD')
+    ).length;
 
     return {
       totalWorkers: employees.length,
-      supervisors,
+      supervisors: supervisorsCount,
       presentToday,
       absentToday,
       completedProjects,

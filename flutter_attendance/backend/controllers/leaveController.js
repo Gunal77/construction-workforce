@@ -49,11 +49,32 @@ const getLeaveRequests = async (req, res) => {
         e.email AS employee_email,
         lt.name AS leave_type_name,
         lt.code AS leave_type_code,
-        a.name AS approved_by_name
+        a.name AS approved_by_name,
+        COALESCE(
+          lr.project_id,
+          (SELECT pe.project_id FROM project_employees pe 
+           WHERE pe.employee_id = lr.employee_id 
+           AND pe.status = 'active' 
+           AND (pe.assignment_end_date IS NULL OR pe.assignment_end_date >= CURRENT_DATE)
+           ORDER BY pe.assigned_at DESC LIMIT 1),
+          e.project_id
+        ) AS project_id,
+        COALESCE(
+          p.name,
+          (SELECT pr.name FROM project_employees pe 
+           JOIN projects pr ON pr.id = pe.project_id
+           WHERE pe.employee_id = lr.employee_id 
+           AND pe.status = 'active' 
+           AND (pe.assignment_end_date IS NULL OR pe.assignment_end_date >= CURRENT_DATE)
+           ORDER BY pe.assigned_at DESC LIMIT 1),
+          ep.name
+        ) AS project_name
       FROM leave_requests lr
       JOIN employees e ON e.id = lr.employee_id
       JOIN leave_types lt ON lt.id = lr.leave_type_id
       LEFT JOIN admins a ON a.id = lr.approved_by
+      LEFT JOIN projects p ON p.id = lr.project_id
+      LEFT JOIN projects ep ON ep.id = e.project_id
       WHERE 1=1
     `;
     
@@ -106,6 +127,7 @@ const createLeaveRequest = async (req, res) => {
     // Support both camelCase and snake_case for flexibility
     const employeeId = req.body.employeeId || req.body.employee_id;
     const leaveTypeId = req.body.leaveTypeId || req.body.leave_type_id;
+    const projectId = req.body.projectId || req.body.project_id;
     const startDate = req.body.startDate || req.body.start_date;
     const endDate = req.body.endDate || req.body.end_date;
     const reason = req.body.reason || req.body.rejection_reason;
@@ -155,10 +177,10 @@ const createLeaveRequest = async (req, res) => {
     // Create leave request
     const { rows } = await db.query(
       `INSERT INTO leave_requests 
-       (employee_id, leave_type_id, start_date, end_date, number_of_days, reason, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+       (employee_id, leave_type_id, project_id, start_date, end_date, number_of_days, reason, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
        RETURNING *`,
-      [employeeId, leaveTypeId, startDate, endDate, numberOfDays, reason || null]
+      [employeeId, leaveTypeId, projectId || null, startDate, endDate, numberOfDays, reason || null]
     );
     
     return res.status(201).json({ request: rows[0] });

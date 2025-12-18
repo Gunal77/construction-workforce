@@ -118,19 +118,42 @@ export default function PoorPerformers({ workers, attendanceRecords }: PoorPerfo
       issues.push(`${weekAbsentDays} absence${weekAbsentDays > 1 ? 's' : ''} this week`);
     }
 
-    // Calculate attendance percentage (last 30 days)
-    const monthAgo = new Date();
-    monthAgo.setDate(monthAgo.getDate() - 30);
-    const monthRecords = workerRecords.filter(
-      (r) => new Date(r.check_in_time) >= monthAgo
-    );
-
+    // Calculate attendance percentage based on available data range
+    // Use the date range of the provided attendance records, or default to 30 days
+    let dateRangeStart: Date;
+    let dateRangeEnd: Date;
+    
+    if (workerRecords.length > 0) {
+      // Use the actual date range of the provided records
+      const allDates = workerRecords.map(r => new Date(r.check_in_time));
+      dateRangeStart = new Date(Math.min(...allDates.map(d => d.getTime())));
+      dateRangeEnd = new Date(Math.max(...allDates.map(d => d.getTime())));
+      
+      // Also include today if it's after the last record
+      const today = new Date();
+      if (today > dateRangeEnd) {
+        dateRangeEnd = today;
+      }
+    } else {
+      // If no records, use last 30 days as default
+      dateRangeEnd = new Date();
+      dateRangeStart = new Date();
+      dateRangeStart.setDate(dateRangeStart.getDate() - 30);
+    }
+    
+    // Calculate total working days in the range (excluding weekends if needed, or just count all days)
+    const timeDiff = dateRangeEnd.getTime() - dateRangeStart.getTime();
+    const daysDiff = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end days
+    const totalDays = Math.max(daysDiff, 1); // Ensure at least 1 day
+    
+    // Count unique days with attendance
     const uniqueDays = new Set(
-      monthRecords.map((r) => r.check_in_time.split('T')[0])
+      workerRecords.map((r) => r.check_in_time.split('T')[0])
     );
     presentDays = uniqueDays.size;
-    const totalDays = 30;
-    const attendance = Math.round((presentDays / totalDays) * 100);
+    
+    // Calculate attendance percentage
+    const attendance = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0;
 
     // Determine priority: GOOD (green) for >80% attendance, then MEDIUM, then HIGH
     let priority: 'GOOD' | 'MEDIUM' | 'HIGH' = 'GOOD';

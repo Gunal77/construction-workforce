@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { UserCog, Mail, Phone, Calendar, Building2, MapPin, DollarSign, ChevronRight, Loader2, Eye, FolderKanban } from 'lucide-react';
+import Pagination from '@/components/Pagination';
 
 interface Supervisor {
   id: string;
@@ -29,6 +30,8 @@ interface Project {
   created_at: string;
 }
 
+const ITEMS_PER_PAGE = 9;
+
 export default function SupervisorDetailsPage() {
   const params = useParams();
   const router = useRouter();
@@ -37,6 +40,7 @@ export default function SupervisorDetailsPage() {
   const [supervisor, setSupervisor] = useState<Supervisor | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     if (supervisorId) {
@@ -67,6 +71,9 @@ export default function SupervisorDetailsPage() {
       } else {
         setSupervisor(data);
       }
+      
+      // Reset to first page when supervisor data is loaded
+      setCurrentPage(1);
     } catch (err: any) {
       console.error('Error fetching supervisor details:', err);
       setError(err.message || 'Failed to load supervisor details');
@@ -97,6 +104,22 @@ export default function SupervisorDetailsPage() {
       return { label: 'Overdue', color: 'bg-red-100 text-red-800' };
     }
     return { label: 'Active', color: 'bg-blue-100 text-blue-800' };
+  };
+
+  // Pagination logic - MUST be before any conditional returns (Rules of Hooks)
+  // All hooks must be called in the same order on every render
+  const assignedProjects = supervisor?.assigned_projects || [];
+  const totalPages = Math.ceil(assignedProjects.length / ITEMS_PER_PAGE);
+  const paginatedProjects = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    return assignedProjects.slice(startIndex, endIndex);
+  }, [assignedProjects, currentPage]);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    // Scroll to top of projects section when page changes
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   if (loading) {
@@ -138,8 +161,6 @@ export default function SupervisorDetailsPage() {
       </div>
     );
   }
-
-  const assignedProjects = supervisor.assigned_projects || [];
 
   return (
     <div className="space-y-6">
@@ -250,8 +271,9 @@ export default function SupervisorDetailsPage() {
               <p className="text-gray-500">No projects assigned to this supervisor</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {assignedProjects.map((project) => {
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {paginatedProjects.map((project) => {
                 const status = getProjectStatus(project);
                 const budget = formatBudget(project.budget);
 
@@ -321,7 +343,28 @@ export default function SupervisorDetailsPage() {
                   </div>
                 );
               })}
-            </div>
+              </div>
+              
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="mt-6 flex justify-center">
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPageChange={handlePageChange}
+                  />
+                </div>
+              )}
+              
+              {/* Results info */}
+              {assignedProjects.length > 0 && (
+                <div className="mt-4 text-center text-sm text-gray-600">
+                  Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} to{' '}
+                  {Math.min(currentPage * ITEMS_PER_PAGE, assignedProjects.length)} of{' '}
+                  {assignedProjects.length} projects
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

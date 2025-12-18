@@ -204,5 +204,87 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// GET /admin/employees/:id/projects - Get assigned projects for an employee
+router.get('/:id/projects', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ message: 'Employee ID is required' });
+    }
+
+    // Get projects from project_employees table where employee is actively assigned
+    const { data: assignments, error } = await supabase
+      .from('project_employees')
+      .select(`
+        project_id,
+        assignment_start_date,
+        assignment_end_date,
+        status,
+        projects:project_id (
+          id,
+          name,
+          location,
+          start_date,
+          end_date
+        )
+      `)
+      .eq('employee_id', id)
+      .eq('status', 'active')
+      .order('assigned_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching employee projects:', error);
+      return res.status(500).json({ message: 'Failed to fetch employee projects' });
+    }
+
+    // Transform the data
+    const projects = (assignments || [])
+      .filter(assignment => assignment.projects !== null)
+      .map(assignment => ({
+        id: assignment.projects.id,
+        name: assignment.projects.name,
+        location: assignment.projects.location,
+        start_date: assignment.projects.start_date,
+        end_date: assignment.projects.end_date,
+        assignment_start_date: assignment.assignment_start_date,
+        assignment_end_date: assignment.assignment_end_date,
+      }));
+
+    // If no projects from project_employees, check direct project_id from employees table
+    if (projects.length === 0) {
+      const { data: employee, error: empError } = await supabase
+        .from('employees')
+        .select(`
+          project_id,
+          projects:project_id (
+            id,
+            name,
+            location,
+            start_date,
+            end_date
+          )
+        `)
+        .eq('id', id)
+        .single();
+
+      if (!empError && employee?.project_id && employee.projects) {
+        projects.push({
+          id: employee.projects.id,
+          name: employee.projects.name,
+          location: employee.projects.location,
+          start_date: employee.projects.start_date,
+          end_date: employee.projects.end_date,
+        });
+      }
+    }
+
+    return res.json({ projects });
+  } catch (err) {
+    console.error('Get employee projects error', err);
+    return res.status(500).json({ message: 'Error fetching employee projects' });
+  }
+});
+
 module.exports = router;
 

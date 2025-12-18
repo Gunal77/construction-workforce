@@ -66,6 +66,14 @@ export const employeesAPI = {
     if (!response.ok) throw { response: { status: response.status, data } };
     return data;
   },
+  getAssignedProjects: async (employeeId: string) => {
+    const response = await fetch(`/api/proxy/employees/${employeeId}/projects`, {
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
   create: async (data: {
     name: string;
     email?: string;
@@ -269,6 +277,14 @@ export const projectsAPI = {
   // Employee Assignment APIs
   getAssignedEmployees: async (projectId: string): Promise<{ employees: ProjectEmployee[]; total: number }> => {
     const response = await fetch(`/api/proxy/projects/${projectId}/employees`, {
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
+  getAllProjectAssignments: async (): Promise<{ assignments: Array<{ project_id: string; employee_id: string; employee_email: string | null; assignment_start_date: string | null; assignment_end_date: string | null }> }> => {
+    const response = await fetch(`/api/proxy/projects/assignments/all`, {
       credentials: 'include',
     });
     const data = await response.json();
@@ -487,6 +503,8 @@ export interface LeaveRequest {
   id: string;
   employee_id: string;
   leave_type_id: string;
+  project_id?: string;
+  project_name?: string;
   start_date: string;
   end_date: string;
   number_of_days: number;
@@ -547,6 +565,7 @@ export const leaveAPI = {
   createRequest: async (data: {
     employeeId: string;
     leaveTypeId: string;
+    projectId?: string;
     startDate: string;
     endDate: string;
     reason?: string;
@@ -557,6 +576,7 @@ export const leaveAPI = {
       body: JSON.stringify({
         employee_id: data.employeeId,
         leave_type_id: data.leaveTypeId,
+        project_id: data.projectId,
         start_date: data.startDate,
         end_date: data.endDate,
         reason: data.reason,

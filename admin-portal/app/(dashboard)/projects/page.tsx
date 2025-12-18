@@ -51,9 +51,12 @@ export default function ProjectsPage() {
   const [loadingClients, setLoadingClients] = useState(false);
 
   useEffect(() => {
-    fetchUserRole();
-    fetchProjects();
-    fetchClients();
+    // Fetch user role and projects/clients in parallel for faster loading
+    Promise.all([
+      fetchUserRole(),
+      fetchProjects(),
+      fetchClients(),
+    ]);
   }, []);
 
   const fetchUserRole = async () => {

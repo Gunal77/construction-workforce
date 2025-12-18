@@ -21,32 +21,46 @@ router.get('/', async (req, res) => {
       return res.status(500).json({ message: 'Failed to fetch supervisors' });
     }
 
-    // Enrich supervisors with project counts
-    const enrichedSupervisors = await Promise.all(
-      (supervisors || []).map(async (supervisor) => {
-        // Get supervisor record from supervisors table
-        const { data: supervisorRecord } = await supabase
-          .from('supervisors')
-          .select('id')
-          .eq('user_id', supervisor.id)
-          .maybeSingle();
+    // Optimize: Batch fetch all supervisor records and project counts in parallel
+    const supervisorUserIds = (supervisors || []).map(s => s.id);
+    
+    // Fetch all supervisor records in one query
+    const { data: supervisorRecords } = await supabase
+      .from('supervisors')
+      .select('id, user_id')
+      .in('user_id', supervisorUserIds);
 
-        let projectCount = 0;
-        if (supervisorRecord) {
-          // Count projects assigned to this supervisor using supervisor.id
-          const { count } = await supabase
-            .from('supervisor_projects_relation')
-            .select('*', { count: 'exact', head: true })
-            .eq('supervisor_id', supervisorRecord.id);
-          projectCount = count || 0;
-        }
+    const supervisorIdMap = new Map();
+    (supervisorRecords || []).forEach(record => {
+      supervisorIdMap.set(record.user_id, record.id);
+    });
 
-        return {
-          ...supervisor,
-          project_count: projectCount,
-        };
-      })
+    const supervisorProfileIds = [...supervisorIdMap.values()];
+
+    // Fetch all project counts in parallel
+    const projectCountPromises = supervisorProfileIds.map(supervisorId =>
+      supabase
+        .from('supervisor_projects_relation')
+        .select('*', { count: 'exact', head: true })
+        .eq('supervisor_id', supervisorId)
     );
+
+    const projectCounts = await Promise.all(projectCountPromises);
+    const projectCountMap = new Map();
+    supervisorProfileIds.forEach((supervisorId, index) => {
+      projectCountMap.set(supervisorId, projectCounts[index].count || 0);
+    });
+
+    // Enrich supervisors with project counts (no async operations needed)
+    const enrichedSupervisors = (supervisors || []).map((supervisor) => {
+      const supervisorProfileId = supervisorIdMap.get(supervisor.id);
+      const projectCount = supervisorProfileId ? (projectCountMap.get(supervisorProfileId) || 0) : 0;
+
+      return {
+        ...supervisor,
+        project_count: projectCount,
+      };
+    });
 
     return res.json({ 
       supervisors: enrichedSupervisors,
@@ -136,25 +150,23 @@ router.get('/:id', async (req, res) => {
       .map((relation) => relation.projects)
       .filter((project) => project !== null);
 
-    // Get client names for projects
-    const projectsWithClients = await Promise.all(
-      assignedProjects.map(async (project) => {
-        let clientName = null;
-        if (project.client_user_id) {
-          const { data: clientUser } = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', project.client_user_id)
-            .maybeSingle();
-          clientName = clientUser?.name || null;
-        }
+    // Optimize: Batch fetch all client names in one query
+    const clientUserIds = [...new Set(assignedProjects.map(p => p.client_user_id).filter(Boolean))];
+    const { data: clientUsers } = await supabase
+      .from('users')
+      .select('id, name')
+      .in('id', clientUserIds);
 
-        return {
-          ...project,
-          client_name: clientName,
-        };
-      })
-    );
+    const clientMap = new Map((clientUsers || []).map(c => [c.id, c.name]));
+
+    // Enrich projects with client names (no async operations needed)
+    const projectsWithClients = assignedProjects.map((project) => {
+      const clientName = project.client_user_id ? (clientMap.get(project.client_user_id) || null) : null;
+      return {
+        ...project,
+        client_name: clientName,
+      };
+    });
 
     return res.json({
       success: true,

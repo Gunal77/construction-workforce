@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { leaveAPI, LeaveType, Employee } from '@/lib/api';
+import { leaveAPI, LeaveType, Employee, projectsAPI, employeesAPI } from '@/lib/api';
 import Input from './Input';
 import Modal from './Modal';
 import { Calendar } from 'lucide-react';
@@ -15,6 +15,11 @@ interface LeaveRequestFormProps {
   onSuccess: () => void;
 }
 
+interface Project {
+  id: string;
+  name: string;
+}
+
 export default function LeaveRequestForm({
   isOpen,
   onClose,
@@ -24,11 +29,14 @@ export default function LeaveRequestForm({
   onSuccess,
 }: LeaveRequestFormProps) {
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [employeeProjects, setEmployeeProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(initialEmployeeId || '');
   const [formData, setFormData] = useState({
     leaveTypeId: '',
+    projectId: '',
     startDate: '',
     endDate: '',
     reason: '',
@@ -38,21 +46,92 @@ export default function LeaveRequestForm({
   useEffect(() => {
     if (isOpen) {
       fetchLeaveTypes();
+      fetchProjects();
       // Set initial employee if provided
       if (initialEmployeeId) {
         setSelectedEmployeeId(initialEmployeeId);
+        fetchEmployeeProjects(initialEmployeeId);
       } else if (employees.length > 0 && !selectedEmployeeId) {
         setSelectedEmployeeId(employees[0].id);
+        fetchEmployeeProjects(employees[0].id);
       }
     }
   }, [isOpen, initialEmployeeId, employees]);
 
+  useEffect(() => {
+    if (selectedEmployeeId) {
+      fetchEmployeeProjects(selectedEmployeeId);
+      // Reset project selection when employee changes
+      setFormData(prev => ({ ...prev, projectId: '' }));
+    }
+  }, [selectedEmployeeId]);
+
   const fetchLeaveTypes = async () => {
     try {
       const response = await leaveAPI.getTypes();
-      setLeaveTypes(response.leaveTypes || []);
+      // Filter to only show: Annual Leave, Sick Leave, Unpaid Leave
+      const simplifiedTypes = (response.leaveTypes || []).filter((type: LeaveType) => 
+        ['ANNUAL', 'SICK', 'UNPAID'].includes(type.code?.toUpperCase() || '')
+      );
+      setLeaveTypes(simplifiedTypes);
     } catch (err: any) {
       console.error('Error fetching leave types:', err);
+    }
+  };
+
+  const fetchProjects = async () => {
+    try {
+      const response = await projectsAPI.getAll();
+      setProjects(response.projects || []);
+    } catch (err: any) {
+      console.error('Error fetching projects:', err);
+    }
+  };
+
+  const fetchEmployeeProjects = async (employeeId: string) => {
+    try {
+      // Try to fetch from the new API endpoint
+      try {
+        const data = await employeesAPI.getAssignedProjects(employeeId);
+        const assignedProjects: Project[] = (data.projects || []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+        }));
+        setEmployeeProjects(assignedProjects);
+        
+        // Auto-select project if employee has only one assigned project
+        if (assignedProjects.length === 1 && !formData.projectId) {
+          setFormData(prev => ({ ...prev, projectId: assignedProjects[0].id }));
+        }
+        return;
+      } catch (apiErr) {
+        console.log('API endpoint not available, using fallback');
+      }
+      
+      // Fallback: Get from employee's direct project_id and project_employees table
+      const employeeRes = await employeesAPI.getById(employeeId);
+      const employee = employeeRes.employee;
+      
+      const assignedProjects: Project[] = [];
+      
+      // Check direct project_id
+      if (employee?.project_id) {
+        const project = projects.find(p => p.id === employee.project_id);
+        if (project) {
+          assignedProjects.push(project);
+        }
+      }
+      
+      // Also check if we can get from project_employees via a query
+      // For now, we'll use the direct project_id
+      setEmployeeProjects(assignedProjects);
+      
+      if (assignedProjects.length === 1 && !formData.projectId) {
+        setFormData(prev => ({ ...prev, projectId: assignedProjects[0].id }));
+      }
+    } catch (err: any) {
+      console.error('Error fetching employee projects:', err);
+      setEmployeeProjects([]);
     }
   };
 
@@ -122,6 +201,7 @@ export default function LeaveRequestForm({
       await leaveAPI.createRequest({
         employeeId: selectedEmployeeId,
         leaveTypeId: formData.leaveTypeId,
+        projectId: formData.projectId || undefined,
         startDate: formData.startDate,
         endDate: formData.endDate,
         reason: formData.reason || undefined,
@@ -130,6 +210,7 @@ export default function LeaveRequestForm({
       // Reset form
       setFormData({
         leaveTypeId: '',
+        projectId: '',
         startDate: '',
         endDate: '',
         reason: '',
@@ -200,6 +281,38 @@ export default function LeaveRequestForm({
           </select>
         </div>
 
+        {selectedEmployeeId && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Project *
+            </label>
+            <select
+              value={formData.projectId}
+              onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
+              required
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="">Select Project</option>
+              {employeeProjects.length > 0 ? (
+                employeeProjects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))
+              ) : (
+                projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))
+              )}
+            </select>
+            {employeeProjects.length === 0 && (
+              <p className="text-xs text-gray-500 mt-1">No assigned project. Select from all projects.</p>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -260,7 +373,7 @@ export default function LeaveRequestForm({
           </button>
           <button
             type="submit"
-            disabled={loading || !selectedEmployeeId || !formData.leaveTypeId || !formData.startDate || !formData.endDate}
+            disabled={loading || !selectedEmployeeId || !formData.leaveTypeId || !formData.projectId || !formData.startDate || !formData.endDate}
             className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Submitting...' : 'Submit Request'}

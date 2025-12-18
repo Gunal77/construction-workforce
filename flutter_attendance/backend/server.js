@@ -19,6 +19,8 @@ const projectEmployeesRoutes = require('./routes/projectEmployees');
 const clientProjectsRoutes = require('./routes/clientProjects');
 const clientAuthRoutes = require('./routes/clientAuth');
 const clientStaffsRoutes = require('./routes/clientStaffs');
+const clientAttendanceRoutes = require('./routes/clientAttendance');
+const clientSupervisorsRoutes = require('./routes/clientSupervisors');
 
 const app = express();
 
@@ -47,6 +49,8 @@ app.use(['/api/admin/supervisors', '/admin/supervisors'], adminSupervisorsRoutes
 app.use(['/api/client/projects', '/client/projects'], clientProjectsRoutes);
 app.use(['/api/client', '/client'], clientAuthRoutes);
 app.use(['/api/client/staffs', '/client/staffs'], clientStaffsRoutes);
+app.use(['/api/client/attendance', '/client/attendance'], clientAttendanceRoutes);
+app.use(['/api/client/supervisors', '/client/supervisors'], clientSupervisorsRoutes);
 
 // Not found handler
 app.use((req, res) => {

@@ -6,8 +6,9 @@ import Table from '@/components/Table';
 import Modal from '@/components/Modal';
 import Input from '@/components/Input';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Plus, Search, CheckCircle2, XCircle, Calendar, Clock, FileText, CalendarDays } from 'lucide-react';
+import { Plus, Search, CheckCircle2, XCircle, Calendar, Clock, FileText, CalendarDays, Eye, Download, AlertCircle } from 'lucide-react';
 import Pagination from '@/components/Pagination';
+import ViewTimesheetModal from '@/components/ViewTimesheetModal';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -20,7 +21,11 @@ export default function TimesheetsPage() {
   const [loading, setLoading] = useState(true);
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedTimesheet, setSelectedTimesheet] = useState<Timesheet | null>(null);
+  const [dateRangeStart, setDateRangeStart] = useState('');
+  const [dateRangeEnd, setDateRangeEnd] = useState('');
+  const [employeeProjects, setEmployeeProjects] = useState<Project[]>([]);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [view, setView] = useState<ViewType>('daily');
@@ -46,8 +51,11 @@ export default function TimesheetsPage() {
   });
 
   useEffect(() => {
-    fetchEmployees();
-    fetchProjects();
+    // Fetch employees and projects in parallel for faster loading
+    Promise.all([
+      fetchEmployees(),
+      fetchProjects(),
+    ]);
   }, []);
 
   useEffect(() => {
@@ -111,6 +119,10 @@ export default function TimesheetsPage() {
         const { startDate, endDate } = getDateRange();
         params.startDate = startDate;
         params.endDate = endDate;
+      } else if (dateRangeStart && dateRangeEnd) {
+        // Use custom date range if provided
+        params.startDate = dateRangeStart;
+        params.endDate = dateRangeEnd;
       }
 
       if (statusFilter !== 'all') {
@@ -119,7 +131,7 @@ export default function TimesheetsPage() {
       if (approvalStatusFilter !== 'all') {
         params.approvalStatus = approvalStatusFilter;
       }
-      if (projectFilter !== 'all') {
+      if (projectFilter && projectFilter !== 'all') {
         params.projectId = projectFilter;
       }
       if (employeeFilter) {
@@ -279,6 +291,16 @@ export default function TimesheetsPage() {
     });
   };
 
+  const fetchEmployeeProjects = async (employeeId: string) => {
+    try {
+      const response = await projectsAPI.getEmployeeProjects(employeeId);
+      setEmployeeProjects(response.projects || []);
+    } catch (err) {
+      console.error('Error fetching employee projects:', err);
+      setEmployeeProjects([]);
+    }
+  };
+
   const openEditModal = (timesheet: Timesheet) => {
     if (timesheet.approval_status === 'Approved') {
       setError('Cannot edit approved timesheet');
@@ -297,12 +319,20 @@ export default function TimesheetsPage() {
       status: timesheet.status,
       remarks: timesheet.remarks || '',
     });
+    if (timesheet.staff_id) {
+      fetchEmployeeProjects(timesheet.staff_id);
+    }
     setIsFormModalOpen(true);
   };
 
   const openApprovalModal = (timesheet: Timesheet) => {
     setSelectedTimesheet(timesheet);
     setIsApprovalModalOpen(true);
+  };
+
+  const openViewModal = (timesheet: Timesheet) => {
+    setSelectedTimesheet(timesheet);
+    setIsViewModalOpen(true);
   };
 
   const filteredTimesheets = useMemo(() => {
@@ -400,15 +430,30 @@ export default function TimesheetsPage() {
     {
       key: 'time',
       header: 'Time',
-      render: (item: Timesheet) => (
-        <div className="text-sm">
-          <p className="text-gray-900">
-            {new Date(item.check_in).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
-            {item.check_out && ` - ${new Date(item.check_out).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`}
-          </p>
-          <p className="text-xs text-gray-500">{toNumber(item.total_hours).toFixed(2)}h</p>
-        </div>
-      ),
+      render: (item: Timesheet) => {
+        const regularHours = Math.min(toNumber(item.total_hours), 8);
+        const otHours = toNumber(item.overtime_hours);
+        const totalHours = toNumber(item.total_hours);
+        return (
+          <div className="text-sm">
+            <p className="text-gray-900">
+              {new Date(item.check_in).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+              {item.check_out && ` - ${new Date(item.check_out).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`}
+            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-xs text-blue-600 font-medium">{regularHours.toFixed(2)}h</p>
+              {otHours > 0 && (
+                <>
+                  <span className="text-xs text-gray-400">+</span>
+                  <p className="text-xs text-orange-600 font-medium">{otHours.toFixed(2)}h OT</p>
+                </>
+              )}
+              <span className="text-xs text-gray-400">=</span>
+              <p className="text-xs text-gray-700 font-semibold">{totalHours.toFixed(2)}h</p>
+            </div>
+          </div>
+        );
+      },
     },
     {
       key: 'project',
@@ -443,6 +488,13 @@ export default function TimesheetsPage() {
       header: 'Actions',
       render: (item: Timesheet) => (
         <div className="flex items-center space-x-2">
+          <button
+            onClick={() => openViewModal(item)}
+            className="p-1.5 text-primary-600 hover:bg-primary-50 rounded transition-colors"
+            title="View Details"
+          >
+            <Eye className="h-4 w-4" />
+          </button>
           {item.approval_status !== 'Approved' && (
             <button
               onClick={() => openEditModal(item)}
@@ -505,6 +557,48 @@ export default function TimesheetsPage() {
     },
   ];
 
+  const handleExportCSV = () => {
+    const headers = ['Employee', 'Email', 'Date', 'Check In', 'Check Out', 'Regular Hours', 'OT Hours', 'Total Hours', 'Project', 'Status', 'Approval Status', 'OT Approval'];
+    const rows = filteredTimesheets.map(t => {
+      const regularHours = Math.min(toNumber(t.total_hours), 8);
+      const otHours = toNumber(t.overtime_hours);
+      const checkInTime = new Date(t.check_in).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const checkOutTime = t.check_out ? new Date(t.check_out).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+      const date = formatDate(new Date(t.work_date));
+      return [
+        t.staff_name,
+        t.staff_email,
+        date,
+        checkInTime,
+        checkOutTime,
+        regularHours.toFixed(2),
+        otHours.toFixed(2),
+        toNumber(t.total_hours).toFixed(2),
+        t.project_name || 'N/A',
+        t.status,
+        t.approval_status,
+        t.ot_approval_status || 'N/A'
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `timesheets_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setSuccessMessage('Timesheets exported successfully!');
+    setTimeout(() => setSuccessMessage(''), 3000);
+  };
+
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
     if (view === 'daily') {
@@ -553,17 +647,28 @@ export default function TimesheetsPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4 min-w-0">
         <h1 className="text-2xl font-bold text-gray-900">Timesheets</h1>
-        <button
-          onClick={() => {
-            resetForm();
-            setSelectedTimesheet(null);
-            setIsFormModalOpen(true);
-          }}
-          className="flex items-center space-x-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors whitespace-nowrap"
-        >
-          <Plus className="h-5 w-5" />
-          <span>Add Timesheet</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap"
+            title="Export to CSV"
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setSelectedTimesheet(null);
+              setEmployeeProjects([]);
+              setIsFormModalOpen(true);
+            }}
+            className="flex items-center space-x-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors whitespace-nowrap"
+          >
+            <Plus className="h-5 w-5" />
+            <span>Add Timesheet</span>
+          </button>
+        </div>
       </div>
 
       {/* Success/Error Messages */}
@@ -652,9 +757,9 @@ export default function TimesheetsPage() {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 min-w-0">
-          <div className="lg:col-span-2">
+        {/* Compact Filters - Single Row */}
+        <div className="flex flex-wrap items-end gap-3 min-w-0">
+          <div className="flex-1 min-w-[200px] max-w-[300px]">
             <Input
               type="text"
               placeholder="Search by name, email, project..."
@@ -663,44 +768,157 @@ export default function TimesheetsPage() {
               icon={Search}
             />
           </div>
-          <SearchableSelect
-            options={employees.map((e) => ({ value: e.id, label: `${e.name} (${e.email})` }))}
-            value={employeeFilter}
-            onChange={(value) => {
-              setEmployeeFilter(value);
-              setCurrentPage(1);
-            }}
-            placeholder="Filter by Employee"
-          />
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-          >
-            <option value="all">All Status</option>
-            <option value="Present">Present</option>
-            <option value="Absent">Absent</option>
-            <option value="Half-Day">Half-Day</option>
-          </select>
-          <select
-            value={approvalStatusFilter}
-            onChange={(e) => {
-              setApprovalStatusFilter(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-          >
-            <option value="all">All Approval</option>
-            <option value="Draft">Draft</option>
-            <option value="Submitted">Submitted</option>
-            <option value="Approved">Approved</option>
-            <option value="Rejected">Rejected</option>
-          </select>
+          <div className="w-full sm:w-auto sm:min-w-[200px] sm:max-w-[240px]">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Date From</label>
+            <input
+              type="date"
+              value={dateRangeStart}
+              onChange={(e) => {
+                setDateRangeStart(e.target.value);
+                if (e.target.value && !dateRangeEnd) {
+                  setDateRangeEnd(e.target.value);
+                }
+                setShowAllData(false);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            />
+          </div>
+          <div className="w-full sm:w-auto sm:min-w-[200px] sm:max-w-[240px]">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Date To</label>
+            <input
+              type="date"
+              value={dateRangeEnd}
+              onChange={(e) => {
+                setDateRangeEnd(e.target.value);
+                setShowAllData(false);
+                setCurrentPage(1);
+              }}
+              min={dateRangeStart}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            />
+          </div>
+          <div className="w-full sm:w-auto sm:min-w-[180px] sm:max-w-[220px]">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Employee</label>
+            <SearchableSelect
+              options={employees.map((e) => ({ value: e.id, label: `${e.name} (${e.email})` }))}
+              value={employeeFilter}
+              onChange={(value) => {
+                setEmployeeFilter(value);
+                setCurrentPage(1);
+              }}
+              placeholder="All Employees"
+            />
+          </div>
+          <div className="w-full sm:w-auto sm:min-w-[150px] sm:max-w-[180px]">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Project</label>
+            <select
+              value={projectFilter}
+              onChange={(e) => {
+                setProjectFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="all">All Projects</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="w-full sm:w-auto sm:min-w-[130px] sm:max-w-[160px]">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="all">All Status</option>
+              <option value="Present">Present</option>
+              <option value="Absent">Absent</option>
+              <option value="Half-Day">Half-Day</option>
+            </select>
+          </div>
+          <div className="w-full sm:w-auto sm:min-w-[140px] sm:max-w-[170px]">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Approval</label>
+            <select
+              value={approvalStatusFilter}
+              onChange={(e) => {
+                setApprovalStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="all">All Approval</option>
+              <option value="Draft">Draft</option>
+              <option value="Submitted">Submitted</option>
+              <option value="Approved">Approved</option>
+              <option value="Rejected">Rejected</option>
+            </select>
+          </div>
         </div>
       </div>
+
+      {/* Summary Cards */}
+      {!loading && timesheets.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Total Hours</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {timesheets.reduce((sum, t) => sum + toNumber(t.total_hours), 0).toFixed(2)}h
+                </p>
+              </div>
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Clock className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Total OT Hours</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {timesheets.reduce((sum, t) => sum + toNumber(t.overtime_hours), 0).toFixed(2)}h
+                </p>
+              </div>
+              <div className="p-3 bg-orange-100 rounded-lg">
+                <Clock className="h-6 w-6 text-orange-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Approved</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {timesheets.filter(t => t.approval_status === 'Approved').length}
+                </p>
+              </div>
+              <div className="p-3 bg-green-100 rounded-lg">
+                <CheckCircle2 className="h-6 w-6 text-green-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Pending</p>
+                <p className="text-2xl font-bold text-yellow-600">
+                  {timesheets.filter(t => t.approval_status === 'Submitted' || t.approval_status === 'Draft').length}
+                </p>
+              </div>
+              <div className="p-3 bg-yellow-100 rounded-lg">
+                <AlertCircle className="h-6 w-6 text-yellow-600" />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Timesheet Table */}
       {loading ? (
@@ -777,7 +995,14 @@ export default function TimesheetsPage() {
             <SearchableSelect
               options={employees.map((e) => ({ value: e.id, label: `${e.name} (${e.email})` }))}
               value={formData.staffId}
-              onChange={(value) => setFormData({ ...formData, staffId: value })}
+              onChange={(value) => {
+                setFormData({ ...formData, staffId: value, projectId: '' });
+                if (value) {
+                  fetchEmployeeProjects(value);
+                } else {
+                  setEmployeeProjects([]);
+                }
+              }}
               placeholder="Select staff"
               disabled={!!selectedTimesheet}
             />
@@ -811,12 +1036,30 @@ export default function TimesheetsPage() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Project</label>
-            <SearchableSelect
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
-              value={formData.projectId}
-              onChange={(value) => setFormData({ ...formData, projectId: value })}
-              placeholder="Select project"
-            />
+            {formData.staffId ? (
+              <>
+                <SearchableSelect
+                  options={employeeProjects.length > 0 
+                    ? employeeProjects.map((p) => ({ value: p.id, label: p.name }))
+                    : projects.map((p) => ({ value: p.id, label: p.name }))
+                  }
+                  value={formData.projectId}
+                  onChange={(value) => setFormData({ ...formData, projectId: value })}
+                  placeholder="Select project"
+                />
+                {employeeProjects.length === 0 && formData.staffId && (
+                  <p className="text-xs text-yellow-600 mt-1">No assigned projects found. Showing all projects.</p>
+                )}
+              </>
+            ) : (
+              <SearchableSelect
+                options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                value={formData.projectId}
+                onChange={(value) => setFormData({ ...formData, projectId: value })}
+                placeholder="Select employee first"
+                disabled={true}
+              />
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Task Type</label>
@@ -943,6 +1186,16 @@ export default function TimesheetsPage() {
           </div>
         )}
       </Modal>
+
+      {/* View Timesheet Modal */}
+      <ViewTimesheetModal
+        isOpen={isViewModalOpen}
+        onClose={() => {
+          setIsViewModalOpen(false);
+          setSelectedTimesheet(null);
+        }}
+        timesheet={selectedTimesheet}
+      />
     </div>
   );
 }

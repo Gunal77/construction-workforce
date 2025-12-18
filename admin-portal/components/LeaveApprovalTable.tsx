@@ -114,11 +114,30 @@ export default function LeaveApprovalTable({
       ),
     },
     {
+      key: 'project',
+      header: 'Project',
+      render: (item: LeaveRequest) => (
+        <div>
+          <span className="text-sm text-gray-900">{item.project_name || 'Not assigned'}</span>
+        </div>
+      ),
+    },
+    {
       key: 'leave_type',
       header: 'Leave Type',
-      render: (item: LeaveRequest) => (
-        <span className="text-sm text-gray-900">{item.leave_type_name}</span>
-      ),
+      render: (item: LeaveRequest) => {
+        const typeColors: Record<string, string> = {
+          'ANNUAL': 'bg-blue-100 text-blue-800',
+          'SICK': 'bg-green-100 text-green-800',
+          'UNPAID': 'bg-gray-100 text-gray-800',
+        };
+        const colorClass = typeColors[item.leave_type_code?.toUpperCase() || ''] || 'bg-gray-100 text-gray-800';
+        return (
+          <span className={`px-2 py-1 text-xs font-medium rounded-full ${colorClass}`}>
+            {item.leave_type_name}
+          </span>
+        );
+      },
     },
     {
       key: 'dates',
@@ -171,14 +190,26 @@ export default function LeaveApprovalTable({
             </>
           )}
           {item.status === 'approved' && item.approved_by_name && (
-            <span className="text-xs text-gray-500">
-              Approved by {item.approved_by_name}
-            </span>
+            <div className="text-xs text-gray-500">
+              <p>Approved by {item.approved_by_name}</p>
+              {item.approved_at && (
+                <p className="text-gray-400">
+                  {new Date(item.approved_at).toLocaleDateString('en-GB')}
+                </p>
+              )}
+            </div>
           )}
-          {item.status === 'rejected' && item.rejection_reason && (
-            <span className="text-xs text-gray-500" title={item.rejection_reason}>
-              Rejected
-            </span>
+          {item.status === 'rejected' && (
+            <div className="text-xs text-gray-500">
+              <p>Rejected</p>
+              {item.rejection_reason && (
+                <p className="text-gray-400" title={item.rejection_reason}>
+                  {item.rejection_reason.length > 30 
+                    ? item.rejection_reason.substring(0, 30) + '...' 
+                    : item.rejection_reason}
+                </p>
+              )}
+            </div>
           )}
         </div>
       ),
@@ -242,6 +273,10 @@ export default function LeaveApprovalTable({
                 <span className="text-sm text-gray-900">{approvalModal.request.employee_name}</span>
               </div>
               <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Project:</span>
+                <span className="text-sm text-gray-900">{approvalModal.request.project_name || 'Not assigned'}</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-sm font-medium text-gray-700">Leave Type:</span>
                 <span className="text-sm text-gray-900">{approvalModal.request.leave_type_name}</span>
               </div>
@@ -302,6 +337,10 @@ export default function LeaveApprovalTable({
               <div className="flex justify-between">
                 <span className="text-sm font-medium text-gray-700">Employee:</span>
                 <span className="text-sm text-gray-900">{rejectionModal.request.employee_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Project:</span>
+                <span className="text-sm text-gray-900">{rejectionModal.request.project_name || 'Not assigned'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-sm font-medium text-gray-700">Leave Type:</span>

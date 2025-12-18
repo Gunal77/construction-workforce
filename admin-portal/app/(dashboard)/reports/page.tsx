@@ -94,7 +94,8 @@ export default function ReportsPage() {
       const fromDateStr = finalFrom.toISOString().split('T')[0];
       const toDateStr = finalTo.toISOString().split('T')[0];
 
-      const [employeesRes, attendanceRes, projectsRes] = await Promise.all([
+      // Fetch all data in parallel for maximum performance
+      const [employeesRes, attendanceRes, projectsRes, assignmentsRes, lastEndDatesRes, leaveDataRes] = await Promise.allSettled([
         employeesAPI.getAll(),
         attendanceAPI.getAll({
           from: fromDateStr,
@@ -103,42 +104,66 @@ export default function ReportsPage() {
           sortOrder: 'desc',
         }),
         projectsAPI.getAll(),
+        projectsAPI.getAllProjectAssignments(),
+        // Fetch last end dates in parallel (will need employee IDs, so we'll handle this after)
+        Promise.resolve({ lastEndDates: [] }),
+        // Fetch leave statistics in parallel
+        (async () => {
+          try {
+            const currentYear = new Date().getFullYear();
+            const [statsRes, requestsRes] = await Promise.all([
+              leaveAPI.getStatistics(currentYear),
+              leaveAPI.getRequests({ year: currentYear }),
+            ]);
+            return { stats: statsRes, requests: requestsRes.requests || [] };
+          } catch (err) {
+            console.error('Error fetching leave data:', err);
+            return { stats: null, requests: [] };
+          }
+        })(),
       ]);
 
-      const workers = employeesRes.employees || [];
-      const attendanceRecords = attendanceRes.records || [];
-      const projects = projectsRes.projects || [];
+      const workers = employeesRes.status === 'fulfilled' ? (employeesRes.value.employees || []) : [];
+      const attendanceRecords = attendanceRes.status === 'fulfilled' ? (attendanceRes.value.records || []) : [];
+      // Handle both response structures: { projects: [...] } or just [...]
+      const projectsRaw = projectsRes.status === 'fulfilled' ? projectsRes.value : null;
+      const projects = projectsRaw?.projects || projectsRaw || [];
+      const projectAssignments = assignmentsRes.status === 'fulfilled' ? (assignmentsRes.value.assignments || []) : [];
+      const leaveData = leaveDataRes.status === 'fulfilled' ? leaveDataRes.value : { stats: null, requests: [] };
+
+      // Log for debugging
+      console.log('Reports Data:', {
+        projectsRaw,
+        projectsCount: projects.length,
+        assignmentsCount: projectAssignments.length,
+        workersCount: workers.length,
+        attendanceRecordsCount: attendanceRecords.length,
+        projectsResStatus: projectsRes.status,
+        projectsResValue: projectsRes.status === 'fulfilled' ? projectsRes.value : null,
+      });
 
       // Get all employee IDs for fetching last end dates
       const employeeIds = workers.map((w: any) => w.id);
       
-      try {
-        const lastEndDatesRes = await lastEndDateAPI.getAll({ 
-          employeeIds,
+      // Fetch last end dates in parallel with other operations
+      if (employeeIds.length > 0) {
+        lastEndDateAPI.getAll({ employeeIds }).then((lastEndDatesRes) => {
+          const datesMap: Record<string, string | null> = {};
+          (lastEndDatesRes.lastEndDates || []).forEach((item: any) => {
+            datesMap[item.employee_id] = item.last_end_date;
+          });
+          setLastEndDates(datesMap);
+        }).catch((err) => {
+          console.error('Error fetching last end dates:', err);
         });
-        const datesMap: Record<string, string | null> = {};
-        (lastEndDatesRes.lastEndDates || []).forEach((item: any) => {
-          datesMap[item.employee_id] = item.last_end_date;
-        });
-        setLastEndDates(datesMap);
-      } catch (err) {
-        console.error('Error fetching last end dates:', err);
       }
       
       // Pass all workers to the component - let it handle filtering internally
       setAllWorkers(workers);
 
-      // Fetch leave statistics
-      try {
-        const currentYear = new Date().getFullYear();
-        const statsRes = await leaveAPI.getStatistics(currentYear);
-        setLeaveStats(statsRes);
-        
-        const requestsRes = await leaveAPI.getRequests({ year: currentYear });
-        setLeaveRequests(requestsRes.requests || []);
-      } catch (err) {
-        console.error('Error fetching leave data:', err);
-      }
+      // Set leave statistics
+      setLeaveStats(leaveData.stats);
+      setLeaveRequests(leaveData.requests);
 
       // Calculate statistics for selected date range
       const activeProjects = projects.filter((p: any) => !p.end_date || new Date(p.end_date) > new Date()).length;
@@ -253,21 +278,74 @@ export default function ReportsPage() {
 
       const budgetUtilization = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
 
-      // Create a map of user emails to employee project IDs for efficient lookup
-      const emailToProjectMap: Record<string, string> = {};
-      workers.forEach((w: any) => {
-        if (w.email && w.project_id) {
-          emailToProjectMap[w.email.toLowerCase()] = w.project_id;
+      // Create a map of employee emails to their project assignments with date ranges
+      // Structure: { email: [{ project_id, start_date, end_date }] }
+      const emailToAssignmentsMap: Record<string, Array<{ project_id: string; start_date: Date | null; end_date: Date | null }>> = {};
+      const projectWorkerCounts: Record<string, Set<string>> = {};
+      
+      // Initialize project worker counts
+      projects.forEach((p: any) => {
+        projectWorkerCounts[p.id] = new Set();
+      });
+
+      // Build email to assignments map and count workers per project from project_employees table
+      projectAssignments.forEach((assignment: any) => {
+        if (assignment.employee_email) {
+          const email = assignment.employee_email.toLowerCase();
+          const assignmentStart = assignment.assignment_start_date ? new Date(assignment.assignment_start_date) : null;
+          const assignmentEnd = assignment.assignment_end_date ? new Date(assignment.assignment_end_date) : null;
+          
+          if (!emailToAssignmentsMap[email]) {
+            emailToAssignmentsMap[email] = [];
+          }
+          
+          emailToAssignmentsMap[email].push({
+            project_id: assignment.project_id,
+            start_date: assignmentStart,
+            end_date: assignmentEnd,
+          });
+          
+          // Count worker for this project (if assignment overlaps with selected range)
+          const rangeStart = normalizeDateToStartOfDay(finalFrom);
+          const rangeEnd = normalizeDateToEndOfDay(finalTo);
+          if (!assignmentEnd || assignmentEnd >= rangeStart) {
+            if (!assignmentStart || assignmentStart <= rangeEnd) {
+              projectWorkerCounts[assignment.project_id]?.add(assignment.employee_id);
+            }
+          }
         }
       });
 
       const projectReports = projects.map((project: any) => {
-        const projectWorkers = workers.filter((w: any) => w.project_id === project.id);
-        // Match attendance records by email (attendance has user_email, employees have email)
+        // Count workers assigned to this project
+        const projectWorkersCount = projectWorkerCounts[project.id]?.size || 0;
+        
+        // Match attendance records by email and check if assignment date range includes the record date
         const projectRecords = rangeRecords.filter((r: any) => {
           if (!r.user_email) return false;
           const recordEmail = r.user_email.toLowerCase();
-          return emailToProjectMap[recordEmail] === project.id;
+          const assignments = emailToAssignmentsMap[recordEmail];
+          
+          if (!assignments || assignments.length === 0) return false;
+          
+          const recordDate = normalizeDateToStartOfDay(new Date(r.check_in_time));
+          
+          // Check if any assignment for this email matches the project and includes the record date
+          return assignments.some((assignment: any) => {
+            if (assignment.project_id !== project.id) return false;
+            
+            // If no date range, consider it active
+            if (!assignment.start_date && !assignment.end_date) return true;
+            
+            // Check if record date falls within assignment date range
+            const start = assignment.start_date ? normalizeDateToStartOfDay(assignment.start_date) : null;
+            const end = assignment.end_date ? normalizeDateToEndOfDay(assignment.end_date) : null;
+            
+            if (start && recordDate < start) return false;
+            if (end && recordDate > end) return false;
+            
+            return true;
+          });
         });
         
         const projectHours = projectRecords.reduce((sum: number, record: any) => {
@@ -316,7 +394,7 @@ export default function ReportsPage() {
           name: project.name,
           startDate: project.start_date,
           status,
-          workers: projectWorkers.length,
+          workers: projectWorkersCount,
           totalHours: Math.round(projectHours),
           budget: project.budget ? (typeof project.budget === 'string' ? parseFloat(project.budget) : project.budget) : null,
           spent,
@@ -336,8 +414,27 @@ export default function ReportsPage() {
         budgetUtilization,
         projectReports,
       });
+
+      // Log final project reports for debugging
+      console.log('Project Reports Generated:', {
+        count: projectReports.length,
+        projects: projectReports.map((p: any) => ({ name: p.name, workers: p.workers, hours: p.totalHours })),
+      });
     } catch (error) {
       console.error('Error fetching reports data:', error);
+      // Set empty data on error to prevent UI from breaking
+      setReportsData({
+        totalProjects: 0,
+        activeProjects: 0,
+        totalWorkers: 0,
+        activeToday: 0,
+        totalHours: 0,
+        hoursTrend: 0,
+        totalBudget: 0,
+        totalSpent: 0,
+        budgetUtilization: 0,
+        projectReports: [],
+      });
     } finally {
       setLoading(false);
     }

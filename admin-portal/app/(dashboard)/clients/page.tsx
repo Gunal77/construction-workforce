@@ -67,6 +67,14 @@ export default function ClientsPage() {
         credentials: 'include',
       });
       
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ 
+          error: 'Failed to fetch clients',
+          message: 'Unknown error'
+        }));
+        throw new Error(errorData.error || errorData.message || 'Failed to fetch clients');
+      }
+
       const data = await response.json();
       
       if (data.success) {
@@ -83,11 +91,22 @@ export default function ClientsPage() {
           hasPrevPage: currentPage > 1,
         });
       } else {
-        alert(data.error || 'Failed to fetch clients');
+        throw new Error(data.error || data.message || 'Failed to fetch clients');
       }
     } catch (error: any) {
       console.error('Error fetching clients:', error);
-      alert('Failed to fetch clients');
+      const errorMessage = error.message || 'Failed to fetch clients. Please check if the backend server is running.';
+      alert(errorMessage);
+      // Set empty state on error
+      setClients([]);
+      setPagination({
+        page: 1,
+        limit: 9,
+        total: 0,
+        totalPages: 0,
+        hasNextPage: false,
+        hasPrevPage: false,
+      });
     } finally {
       setLoading(false);
     }

@@ -19,9 +19,9 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Add timeout to prevent hanging
+      // Add timeout to prevent hanging - reduced to 3 seconds for faster feedback
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
 
       const response = await fetch('/api/auth/login', {
         method: 'POST',

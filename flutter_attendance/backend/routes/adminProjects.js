@@ -24,55 +24,82 @@ router.get('/', async (req, res) => {
       return res.json({ projects: [] });
     }
 
-    // Enrich projects with client names, staff counts, and supervisors
-    const enrichedProjects = await Promise.all(
-      projects.map(async (project) => {
-        // Get client name
-        let clientName = null;
-        if (project.client_user_id) {
-          const { data: clientUser } = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', project.client_user_id)
-            .maybeSingle();
-          clientName = clientUser?.name || null;
-        }
+    // Optimize: Batch fetch all related data in parallel instead of per-project (much faster!)
+    const projectIds = projects.map(p => p.id);
+    const clientUserIds = [...new Set(projects.map(p => p.client_user_id).filter(Boolean))];
 
-        // Get staff count
-        const { count: staffCount } = await supabase
+    // Fetch all related data in parallel
+    const [clientUsersRes, supervisorRelationsRes, supervisorsRes, staffCountsRes] = await Promise.all([
+      // Fetch all client names in one query
+      clientUserIds.length > 0 ? supabase
+        .from('users')
+        .select('id, name')
+        .in('id', clientUserIds) : Promise.resolve({ data: [] }),
+      // Fetch all supervisor relations in one query
+      supabase
+        .from('supervisor_projects_relation')
+        .select('project_id, supervisor_id')
+        .in('project_id', projectIds),
+      // Fetch all supervisors (we'll get IDs from relations first)
+      Promise.resolve({ data: [] }), // Will be populated after we get supervisor IDs
+      // Fetch all staff counts in parallel
+      Promise.all(projectIds.map(projectId =>
+        supabase
           .from('employees')
           .select('*', { count: 'exact', head: true })
-          .eq('project_id', project.id);
+          .eq('project_id', projectId)
+      )),
+    ]);
 
-        // Get assigned supervisor (one per project)
-        const { data: supervisorRelation } = await supabase
-          .from('supervisor_projects_relation')
-          .select('supervisor_id')
-          .eq('project_id', project.id)
-          .limit(1)
-          .maybeSingle();
+    const clientUsers = clientUsersRes.data || [];
+    const supervisorRelations = supervisorRelationsRes.data || [];
+    const staffCounts = staffCountsRes;
 
-        let supervisorName = null;
-        let supervisorUserId = null;
-        if (supervisorRelation?.supervisor_id) {
-          const { data: supervisor } = await supabase
-            .from('supervisors')
-            .select('name, user_id')
-            .eq('id', supervisorRelation.supervisor_id)
-            .maybeSingle();
-          supervisorName = supervisor?.name || null;
-          supervisorUserId = supervisor?.user_id || null;
-        }
+    // Build maps for fast lookup
+    const clientMap = new Map(clientUsers.map(c => [c.id, c.name]));
+    const supervisorMap = new Map();
+    supervisorRelations.forEach(rel => {
+      if (!supervisorMap.has(rel.project_id)) {
+        supervisorMap.set(rel.project_id, rel.supervisor_id);
+      }
+    });
 
-        return {
-          ...project,
-          client_name: clientName,
-          staff_count: staffCount || 0,
-          supervisor_name: supervisorName,
-          supervisor_id: supervisorUserId || null, // Use user_id from supervisors table
-        };
-      })
-    );
+    // Fetch supervisors in batch
+    const supervisorIds = [...new Set(supervisorMap.values())];
+    const supervisorsData = supervisorIds.length > 0 ? await supabase
+      .from('supervisors')
+      .select('id, name, user_id')
+      .in('id', supervisorIds) : { data: [] };
+
+    const supervisorNameMap = new Map();
+    const supervisorUserIdMap = new Map();
+    (supervisorsData.data || []).forEach(s => {
+      supervisorNameMap.set(s.id, s.name);
+      supervisorUserIdMap.set(s.id, s.user_id);
+    });
+
+    // Build staff count map
+    const staffCountMap = new Map();
+    projectIds.forEach((projectId, index) => {
+      staffCountMap.set(projectId, staffCounts[index].count || 0);
+    });
+
+    // Enrich projects with batched data (no async operations needed now)
+    const enrichedProjects = projects.map((project) => {
+      const clientName = project.client_user_id ? clientMap.get(project.client_user_id) || null : null;
+      const staffCount = staffCountMap.get(project.id) || 0;
+      const supervisorId = supervisorMap.get(project.id);
+      const supervisorName = supervisorId ? supervisorNameMap.get(supervisorId) || null : null;
+      const supervisorUserId = supervisorId ? supervisorUserIdMap.get(supervisorId) || null : null;
+
+      return {
+        ...project,
+        client_name: clientName,
+        staff_count: staffCount,
+        supervisor_name: supervisorName,
+        supervisor_id: supervisorUserId || null,
+      };
+    });
 
     return res.json({ projects: enrichedProjects });
   } catch (err) {
@@ -123,7 +150,10 @@ router.get('/:id', async (req, res) => {
     // If no relations, return empty supervisors array
     if (!supervisorRelations || supervisorRelations.length === 0) {
       return res.json({ 
-        project,
+        project: {
+          ...project,
+          supervisor_id: null // Ensure supervisor_id is always present
+        },
         supervisors: []
       });
     }
@@ -131,16 +161,19 @@ router.get('/:id', async (req, res) => {
     // Get supervisor IDs
     const supervisorIds = supervisorRelations.map(rel => rel.supervisor_id);
 
-    // Fetch supervisor details
+    // Fetch supervisor details (include user_id to match frontend expectations)
     const { data: supervisorsData, error: supervisorsError } = await supabase
       .from('supervisors')
-      .select('id, name, email, phone')
+      .select('id, name, email, phone, user_id')
       .in('id', supervisorIds);
 
     if (supervisorsError) {
       console.error('Error fetching supervisors:', supervisorsError);
       return res.json({ 
-        project,
+        project: {
+          ...project,
+          supervisor_id: null
+        },
         supervisors: []
       });
     }
@@ -154,8 +187,16 @@ router.get('/:id', async (req, res) => {
       };
     });
 
+    // Get the first supervisor's user_id (since only one supervisor per project)
+    // This is what the frontend expects as supervisor_id
+    const firstSupervisor = supervisors.length > 0 ? supervisors[0] : null;
+    const supervisorUserId = firstSupervisor?.user_id || null;
+
     return res.json({ 
-      project,
+      project: {
+        ...project,
+        supervisor_id: supervisorUserId // Add supervisor_id to project object for frontend
+      },
       supervisors: supervisors || []
     });
   } catch (err) {
