@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { supabase } = require('../config/supabaseClient');
+const emailService = require('../services/emailService');
 
 /**
  * Safely parse project_breakdown JSON
@@ -504,6 +505,25 @@ const staffSignOff = async (req, res) => {
     const updatedSummary = updateResult.rows[0];
     updatedSummary.project_breakdown = parseProjectBreakdown(updatedSummary.project_breakdown);
 
+    // Send email notification to admin (async, don't wait)
+    (async () => {
+      try {
+        // Get employee details
+        const { rows: empRows } = await db.query(
+          'SELECT name, email FROM employees WHERE id = $1',
+          [updatedSummary.employee_id]
+        );
+        
+        if (empRows.length > 0) {
+          const employee = empRows[0];
+          await emailService.sendMonthlySummarySignNotification(updatedSummary, employee);
+        }
+      } catch (emailError) {
+        console.error('Failed to send monthly summary sign email notification:', emailError);
+        // Don't fail the request if email fails
+      }
+    })();
+
     return res.json({
       message: 'Monthly summary signed successfully',
       summary: updatedSummary
@@ -597,6 +617,37 @@ const adminApproveReject = async (req, res) => {
 
     const updatedSummary = updateResult.rows[0];
     updatedSummary.project_breakdown = parseProjectBreakdown(updatedSummary.project_breakdown);
+
+    // Send email notification to staff (async, don't wait)
+    (async () => {
+      try {
+        // Get employee and admin details
+        const { rows: empRows } = await db.query(
+          'SELECT name, email FROM employees WHERE id = $1',
+          [updatedSummary.employee_id]
+        );
+        const { rows: adminRows } = await db.query(
+          'SELECT name, email FROM admins WHERE id = $1',
+          [adminId]
+        );
+        
+        if (empRows.length > 0) {
+          const employee = empRows[0];
+          const adminName = adminRows[0]?.name || 'Administrator';
+          
+          await emailService.sendMonthlySummaryStatusNotification(
+            updatedSummary,
+            employee,
+            newStatus,
+            adminName,
+            updatedSummary.admin_remarks
+          );
+        }
+      } catch (emailError) {
+        console.error('Failed to send monthly summary status email notification:', emailError);
+        // Don't fail the request if email fails
+      }
+    })();
 
     return res.json({
       message: `Monthly summary ${action}d successfully`,

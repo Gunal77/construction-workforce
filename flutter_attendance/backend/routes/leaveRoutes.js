@@ -93,6 +93,7 @@ router.get('/admin/requests', adminAuthMiddleware, leaveController.getLeaveReque
 router.post('/admin/requests', adminAuthMiddleware, leaveController.createLeaveRequest);
 router.get('/admin/statistics', adminAuthMiddleware, leaveController.getLeaveStatistics);
 router.put('/admin/requests/:requestId/status', adminAuthMiddleware, leaveController.updateLeaveRequestStatus);
+router.post('/admin/requests/bulk-approve', adminAuthMiddleware, leaveController.bulkApproveLeaveRequests);
 router.post('/admin/initialize-balances', adminAuthMiddleware, leaveController.initializeLeaveBalances);
 
 module.exports = router;

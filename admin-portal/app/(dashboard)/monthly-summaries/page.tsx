@@ -431,7 +431,7 @@ export default function MonthlySummariesPage() {
           <button
             onClick={handleExportPDF}
             disabled={isExportingPDF || filteredSummaries.filter(s => s.status === 'APPROVED').length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Download className={`h-4 w-4 ${isExportingPDF ? 'animate-spin' : ''}`} />
             <span>Export PDF</span>
@@ -439,7 +439,7 @@ export default function MonthlySummariesPage() {
           <button
             onClick={handleExportExcel}
             disabled={isExportingExcel || filteredSummaries.filter(s => s.status === 'APPROVED').length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <FileSpreadsheet className={`h-4 w-4 ${isExportingExcel ? 'animate-spin' : ''}`} />
             <span>Export Excel</span>

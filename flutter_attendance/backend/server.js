@@ -12,6 +12,8 @@ const monthlySummaryRoutes = require('./routes/monthlySummaryRoutes');
 const leaveRoutes = require('./routes/leaveRoutes');
 const timesheetRoutes = require('./routes/timesheetRoutes');
 const exportRoutes = require('./routes/exportRoutes');
+const reminderRoutes = require('./routes/reminderRoutes');
+const { startScheduler } = require('./services/scheduler');
 const adminProjectsRoutes = require('./routes/adminProjects');
 const adminEmployeesRoutes = require('./routes/adminEmployees');
 const adminClientsRoutes = require('./routes/adminClients');
@@ -43,6 +45,7 @@ app.use('/api/monthly-summaries', monthlySummaryRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/timesheets', timesheetRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/reminders', reminderRoutes);
 // Register employee assignment routes first (more specific routes)
 app.use(['/api/admin/projects', '/admin/projects'], projectEmployeesRoutes);
 app.use(['/api/admin/projects', '/admin/projects'], adminProjectsRoutes);
@@ -82,6 +85,8 @@ const startServer = async () => {
     await initializeDatabase();
     app.listen(env.port, () => {
       console.log(`Server listening on port ${env.port}`);
+      // Start reminder scheduler
+      startScheduler();
     });
   } catch (error) {
     console.error('Failed to start server', error);

@@ -127,10 +127,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
       return;
     }
 
-    if (_isMCLeave && _mcDocument == null) {
-      _showMessage('Medical certificate document is required for MC leave');
-      return;
-    }
+    // MC document is optional for sick leave
 
     setState(() {
       _isLoading = true;
@@ -300,6 +297,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                               vertical: 12,
                             ),
                             decoration: BoxDecoration(
+                              color: Colors.white,
                               border: Border.all(color: Colors.grey.shade300),
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -359,6 +357,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                               vertical: 12,
                             ),
                             decoration: BoxDecoration(
+                              color: Colors.white,
                               border: Border.all(color: Colors.grey.shade300),
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -468,10 +467,10 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                         ),
                         const SizedBox(height: 24),
 
-                        // MC Document (Required for MC leave)
+                        // MC Document (Optional for MC leave)
                         if (_isMCLeave) ...[
                           Text(
-                            'Medical Certificate Document *',
+                            'Medical Certificate Document (Optional)',
                             style: GoogleFonts.poppins(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -484,6 +483,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
+                                color: Colors.white,
                                 border: Border.all(color: Colors.grey.shade300),
                                 borderRadius: BorderRadius.circular(12),
                               ),

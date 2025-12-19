@@ -58,7 +58,7 @@ router.post('/signup', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, source } = req.body; // source: 'admin-portal' or 'mobile-app'
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
@@ -69,7 +69,7 @@ router.post('/login', async (req, res) => {
     // Only select needed fields for faster query - use limit(1) for optimization
     const { data: admin, error } = await supabase
       .from('admins')
-      .select('id, email, password_hash')
+      .select('id, email, password_hash, status')
       .eq('email', normalizedEmail)
       .limit(1)
       .maybeSingle();
@@ -82,6 +82,20 @@ router.post('/login', async (req, res) => {
     if (!admin) {
       // Don't reveal if email exists or not for security
       return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Check if admin is inactive
+    if (admin.status === 'inactive') {
+      return res.status(403).json({ 
+        message: 'Account is inactive. Please contact administrator.' 
+      });
+    }
+
+    // Enforce role-based access: Admin can only login from admin portal
+    if (source === 'mobile-app') {
+      return res.status(403).json({ 
+        message: 'Admin accounts can only access the Admin Portal. Please use the web application.' 
+      });
     }
 
     // Compare password - this is async but should be fast

@@ -326,13 +326,18 @@ class ApiService {
 
   Future<Map<String, dynamic>> login(String email, String password) async {
     final uri = Uri.parse('$_baseUrl/auth/login');
+    // Add source parameter to identify mobile app login
     final response = await _client.post(
       uri,
       headers: {
         HttpHeaders.contentTypeHeader: 'application/json',
         HttpHeaders.acceptHeader: 'application/json',
       },
-      body: jsonEncode({'email': email.trim(), 'password': password}),
+      body: jsonEncode({
+        'email': email.trim(),
+        'password': password,
+        'source': 'mobile-app',
+      }),
     );
 
     final data = _decodeResponse(response);
@@ -348,7 +353,11 @@ class ApiService {
         HttpHeaders.contentTypeHeader: 'application/json',
         HttpHeaders.acceptHeader: 'application/json',
       },
-      body: jsonEncode({'email': email.trim(), 'password': password}),
+      body: jsonEncode({
+        'email': email.trim(),
+        'password': password,
+        'source': 'mobile-app',
+      }),
     );
 
     final data = _decodeResponse(response);

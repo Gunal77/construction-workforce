@@ -13,6 +13,8 @@ interface LeaveApprovalTableProps {
   currentPage?: number;
   onPageChange?: (page: number) => void;
   itemsPerPage?: number;
+  selectedLeaveIds?: string[];
+  onSelectionChange?: (selectedIds: string[]) => void;
 }
 
 export default function LeaveApprovalTable({ 
@@ -21,6 +23,8 @@ export default function LeaveApprovalTable({
   currentPage: externalCurrentPage,
   onPageChange: externalOnPageChange,
   itemsPerPage = 10,
+  selectedLeaveIds = [],
+  onSelectionChange,
 }: LeaveApprovalTableProps) {
   const [loading, setLoading] = useState<string | null>(null);
   const [rejectionModal, setRejectionModal] = useState<{ open: boolean; requestId: string | null; request?: LeaveRequest }>({
@@ -38,12 +42,21 @@ export default function LeaveApprovalTable({
   const currentPage = externalCurrentPage ?? internalPage;
   const onPageChange = externalOnPageChange ?? setInternalPage;
 
+  // If external pagination is provided, use requests directly (already paginated)
+  // Otherwise, paginate internally
   const paginatedRequests = useMemo(() => {
+    if (externalCurrentPage !== undefined || externalOnPageChange) {
+      // External pagination - use requests as-is (already paginated by parent)
+      return requests;
+    }
+    // Internal pagination
     const startIndex = (currentPage - 1) * itemsPerPage;
     return requests.slice(startIndex, startIndex + itemsPerPage);
-  }, [requests, currentPage, itemsPerPage]);
+  }, [requests, currentPage, itemsPerPage, externalCurrentPage, externalOnPageChange]);
 
-  const totalPages = Math.ceil(requests.length / itemsPerPage);
+  const totalPages = externalCurrentPage !== undefined || externalOnPageChange 
+    ? 0 // Don't show pagination if external pagination is used
+    : Math.ceil(requests.length / itemsPerPage);
 
   const handleApprove = async () => {
     if (!approvalModal.requestId) return;
@@ -102,7 +115,80 @@ export default function LeaveApprovalTable({
     }
   };
 
+  // Handle individual checkbox change
+  const handleCheckboxChange = (requestId: string, checked: boolean) => {
+    if (!onSelectionChange) return;
+    
+    if (checked) {
+      onSelectionChange([...selectedLeaveIds, requestId]);
+    } else {
+      onSelectionChange(selectedLeaveIds.filter(id => id !== requestId));
+    }
+  };
+
+  // Handle "Select All" checkbox
+  const handleSelectAll = (checked: boolean) => {
+    if (!onSelectionChange) return;
+    
+    if (checked) {
+      // Only select PENDING requests
+      const pendingIds = paginatedRequests
+        .filter(req => req.status === 'pending')
+        .map(req => req.id);
+      onSelectionChange([...new Set([...selectedLeaveIds, ...pendingIds])]);
+    } else {
+      // Deselect all visible requests
+      const visibleIds = paginatedRequests.map(req => req.id);
+      onSelectionChange(selectedLeaveIds.filter(id => !visibleIds.includes(id)));
+    }
+  };
+
+  // Check if all visible pending requests are selected
+  const pendingRequests = paginatedRequests.filter(req => req.status === 'pending');
+  const allPendingSelected = pendingRequests.length > 0 && 
+    pendingRequests.every(req => selectedLeaveIds.includes(req.id));
+  const somePendingSelected = pendingRequests.some(req => selectedLeaveIds.includes(req.id));
+
   const columns = [
+    {
+      key: 'checkbox',
+      header: 'Select',
+      renderHeader: () => (
+        <div className="flex justify-center">
+          <input
+            type="checkbox"
+            checked={allPendingSelected}
+            ref={(input) => {
+              if (input) input.indeterminate = somePendingSelected && !allPendingSelected;
+            }}
+            onChange={(e) => handleSelectAll(e.target.checked)}
+            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
+          />
+        </div>
+      ),
+      render: (item: LeaveRequest) => {
+        const isPending = item.status === 'pending';
+        const isChecked = selectedLeaveIds.includes(item.id);
+        
+        return (
+          <div className="flex justify-center">
+            <input
+              type="checkbox"
+              checked={isChecked}
+              disabled={!isPending}
+              onChange={(e) => {
+                e.stopPropagation();
+                handleCheckboxChange(item.id, e.target.checked);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className={`h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded ${
+                isPending ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+              }`}
+            />
+          </div>
+        );
+      },
+    },
     {
       key: 'employee',
       header: 'Employee',
@@ -234,8 +320,8 @@ export default function LeaveApprovalTable({
         </div>
       )}
 
-      {/* Results count */}
-      {requests.length > 0 && (
+      {/* Results count - only show if using internal pagination */}
+      {requests.length > 0 && (externalCurrentPage === undefined && !externalOnPageChange) && (
         <div className="text-sm text-gray-600 mb-4">
           Showing {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, requests.length)} of {requests.length} requests
         </div>
@@ -248,8 +334,8 @@ export default function LeaveApprovalTable({
         emptyMessage="No leave requests found"
       />
 
-      {/* Pagination */}
-      {totalPages > 1 && (
+      {/* Pagination - only show if using internal pagination */}
+      {totalPages > 1 && (externalCurrentPage === undefined && !externalOnPageChange) && (
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}

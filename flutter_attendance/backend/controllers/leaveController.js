@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { uploadLeaveDocument } = require('../services/uploadService');
+const emailService = require('../services/emailService');
 
 // Get all leave types
 const getLeaveTypes = async (req, res) => {
@@ -177,15 +178,10 @@ const createLeaveRequest = async (req, res) => {
     
     const leaveTypeCode = leaveTypeResult[0].code;
     
-    // Validate MC document upload for Medical Leave
+    // Handle MC document upload for Medical Leave (optional)
     let mcDocumentUrl = null;
-    if (leaveTypeCode === 'SICK' || leaveTypeCode === 'MC') {
-      if (!req.file) {
-        return res.status(400).json({ 
-          message: 'Medical certificate document is required for MC leave' 
-        });
-      }
-      
+    if ((leaveTypeCode === 'SICK' || leaveTypeCode === 'MC') && req.file) {
+      // MC document is optional - only upload if provided
       try {
         mcDocumentUrl = await uploadLeaveDocument(req.file, employeeId);
       } catch (uploadError) {
@@ -244,7 +240,47 @@ const createLeaveRequest = async (req, res) => {
       ]
     );
     
-    return res.status(201).json({ request: rows[0] });
+    const leaveRequest = rows[0];
+    
+    // Send email notification to admin (async, don't wait)
+    (async () => {
+      try {
+        // Get employee and leave type details
+        const { rows: empRows } = await db.query(
+          'SELECT name, email FROM employees WHERE id = $1',
+          [employeeId]
+        );
+        const { rows: leaveTypeRows } = await db.query(
+          'SELECT name FROM leave_types WHERE id = $1',
+          [leaveTypeId]
+        );
+        
+        let standInName = null;
+        if (standInEmployeeId) {
+          const { rows: standInRows } = await db.query(
+            'SELECT name FROM employees WHERE id = $1',
+            [standInEmployeeId]
+          );
+          standInName = standInRows[0]?.name;
+        }
+        
+        if (empRows.length > 0 && leaveTypeRows.length > 0) {
+          const employee = empRows[0];
+          const leaveTypeName = leaveTypeRows[0].name;
+          
+          await emailService.sendLeaveRequestNotification({
+            ...leaveRequest,
+            leave_type_name: leaveTypeName,
+            stand_in_employee_name: standInName,
+          }, employee);
+        }
+      } catch (emailError) {
+        console.error('Failed to send leave request email notification:', emailError);
+        // Don't fail the request if email fails
+      }
+    })();
+    
+    return res.status(201).json({ request: leaveRequest });
   } catch (error) {
     console.error('Create leave request error', error);
     // Return more detailed error message for debugging
@@ -327,8 +363,51 @@ const updateLeaveRequestStatus = async (req, res) => {
       return res.status(404).json({ message: 'Leave request not found' });
     }
     
+    const updatedRequest = rows[0];
+    
+    // Send email notification to staff (async, don't wait)
+    if (status === 'approved' || status === 'rejected') {
+      (async () => {
+        try {
+          // Get employee and admin details
+          const { rows: empRows } = await db.query(
+            'SELECT name, email FROM employees WHERE id = $1',
+            [updatedRequest.employee_id]
+          );
+          const { rows: adminRows } = await db.query(
+            'SELECT name, email FROM admins WHERE id = $1',
+            [adminId]
+          );
+          const { rows: leaveTypeRows } = await db.query(
+            'SELECT name FROM leave_types WHERE id = $1',
+            [updatedRequest.leave_type_id]
+          );
+          
+          if (empRows.length > 0 && leaveTypeRows.length > 0) {
+            const employee = empRows[0];
+            const adminName = adminRows[0]?.name || 'Administrator';
+            const leaveTypeName = leaveTypeRows[0].name;
+            
+            await emailService.sendLeaveStatusNotification(
+              {
+                ...updatedRequest,
+                leave_type_name: leaveTypeName,
+              },
+              employee,
+              status,
+              adminName,
+              updatedRequest.rejection_reason
+            );
+          }
+        } catch (emailError) {
+          console.error('Failed to send leave status email notification:', emailError);
+          // Don't fail the request if email fails
+        }
+      })();
+    }
+    
     return res.json({ 
-      request: rows[0],
+      request: updatedRequest,
       message: status === 'approved' 
         ? 'Leave request approved. Approved leaves are automatically reflected in attendance and monthly summaries.'
         : status === 'rejected'
@@ -404,12 +483,112 @@ const initializeLeaveBalances = async (req, res) => {
   }
 };
 
+// Bulk approve leave requests
+const bulkApproveLeaveRequests = async (req, res) => {
+  try {
+    const { requestIds } = req.body;
+    const adminId = req.admin?.id || req.user?.id;
+
+    if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
+      return res.status(400).json({ message: 'Request IDs array is required' });
+    }
+
+    // Validate all requests exist and are pending
+    const { rows: existingRequests } = await db.query(
+      `SELECT id, status, employee_id, leave_type_id FROM leave_requests WHERE id = ANY($1::uuid[])`,
+      [requestIds]
+    );
+
+    if (existingRequests.length !== requestIds.length) {
+      return res.status(400).json({ message: 'One or more leave requests not found' });
+    }
+
+    // Check all are pending
+    const nonPendingRequests = existingRequests.filter(req => req.status !== 'pending');
+    if (nonPendingRequests.length > 0) {
+      return res.status(400).json({ 
+        message: `Cannot approve ${nonPendingRequests.length} request(s) that are not pending` 
+      });
+    }
+
+    // Bulk update all requests
+    const updateResult = await db.query(
+      `UPDATE leave_requests 
+       SET 
+         status = 'approved',
+         approved_by = $1,
+         approved_at = NOW(),
+         rejection_reason = NULL,
+         updated_at = NOW()
+       WHERE id = ANY($2::uuid[]) AND status = 'pending'
+       RETURNING *`,
+      [adminId, requestIds]
+    );
+
+    const approvedRequests = updateResult.rows;
+
+    // Send email notifications (async, don't wait)
+    (async () => {
+      for (const leaveRequest of approvedRequests) {
+        try {
+          // Get employee and admin details
+          const { rows: empRows } = await db.query(
+            'SELECT name, email FROM employees WHERE id = $1',
+            [leaveRequest.employee_id]
+          );
+          const { rows: adminRows } = await db.query(
+            'SELECT name, email FROM admins WHERE id = $1',
+            [adminId]
+          );
+          const { rows: leaveTypeRows } = await db.query(
+            'SELECT name FROM leave_types WHERE id = $1',
+            [leaveRequest.leave_type_id]
+          );
+
+          if (empRows.length > 0 && leaveTypeRows.length > 0) {
+            const employee = empRows[0];
+            const adminName = adminRows[0]?.name || 'Administrator';
+            const leaveTypeName = leaveTypeRows[0].name;
+
+            await emailService.sendLeaveStatusNotification(
+              {
+                ...leaveRequest,
+                leave_type_name: leaveTypeName,
+              },
+              employee,
+              'approved',
+              adminName,
+              null
+            );
+          }
+        } catch (emailError) {
+          console.error(`Failed to send email notification for leave request ${leaveRequest.id}:`, emailError);
+          // Don't fail the bulk operation if email fails
+        }
+      }
+    })();
+
+    return res.json({
+      message: `${approvedRequests.length} leave request(s) approved successfully`,
+      approvedCount: approvedRequests.length,
+      requests: approvedRequests,
+    });
+  } catch (error) {
+    console.error('Bulk approve leave requests error', error);
+    return res.status(500).json({ 
+      message: 'Failed to bulk approve leave requests',
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   getLeaveTypes,
   getLeaveBalance,
   getLeaveRequests,
   createLeaveRequest,
   updateLeaveRequestStatus,
+  bulkApproveLeaveRequests,
   getLeaveStatistics,
   initializeLeaveBalances,
 };

@@ -7,7 +7,8 @@ import Card from '@/components/Card';
 import LeaveRequestForm from '@/components/LeaveRequestForm';
 import LeaveApprovalTable from '@/components/LeaveApprovalTable';
 import LeaveBalanceCard from '@/components/LeaveBalanceCard';
-import { Calendar, Plus, CheckCircle2, XCircle, Clock, Download, FileSpreadsheet } from 'lucide-react';
+import { Calendar, Plus, CheckCircle2, XCircle, Clock, Download, FileSpreadsheet, CheckSquare } from 'lucide-react';
+import Modal from '@/components/Modal';
 import Pagination from '@/components/Pagination';
 
 export default function LeaveManagementPage() {
@@ -26,6 +27,10 @@ export default function LeaveManagementPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [selectedLeaveIds, setSelectedLeaveIds] = useState<string[]>([]);
+  const [showBulkApproveModal, setShowBulkApproveModal] = useState(false);
+  const [isBulkApproving, setIsBulkApproving] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   
   const ITEMS_PER_PAGE = 10;
 
@@ -151,6 +156,44 @@ export default function LeaveManagementPage() {
       console.error('Export Excel error:', err);
     } finally {
       setIsExportingExcel(false);
+    }
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedLeaveIds.length === 0) return;
+
+    try {
+      setIsBulkApproving(true);
+      
+      const response = await fetch('/api/proxy/leave/bulk-approve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ requestIds: selectedLeaveIds }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to bulk approve' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to bulk approve leave requests');
+      }
+
+      const data = await response.json();
+      
+      // Show success message
+      setSuccessMessage(`${selectedLeaveIds.length} leave request${selectedLeaveIds.length !== 1 ? 's' : ''} approved successfully`);
+      setTimeout(() => setSuccessMessage(null), 5000);
+      
+      // Clear selection and refresh data
+      setSelectedLeaveIds([]);
+      setShowBulkApproveModal(false);
+      fetchData();
+    } catch (err: any) {
+      console.error('Bulk approve error:', err);
+      alert(err.message || 'Failed to bulk approve leave requests');
+    } finally {
+      setIsBulkApproving(false);
     }
   };
 
@@ -316,9 +359,17 @@ export default function LeaveManagementPage() {
         </div>
         <div className="flex gap-2 mt-4">
           <button
+            onClick={() => setShowBulkApproveModal(true)}
+            disabled={selectedLeaveIds.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <CheckSquare className="h-4 w-4" />
+            <span>Bulk Approve ({selectedLeaveIds.length})</span>
+          </button>
+          <button
             onClick={handleExportPDF}
             disabled={isExportingPDF || leaveRequests.length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Download className={`h-4 w-4 ${isExportingPDF ? 'animate-spin' : ''}`} />
             <span>Export PDF</span>
@@ -326,7 +377,7 @@ export default function LeaveManagementPage() {
           <button
             onClick={handleExportExcel}
             disabled={isExportingExcel || leaveRequests.length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <FileSpreadsheet className={`h-4 w-4 ${isExportingExcel ? 'animate-spin' : ''}`} />
             <span>Export Excel</span>
@@ -392,6 +443,22 @@ export default function LeaveManagementPage() {
         </div>
       )}
 
+      {/* Success Message */}
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center justify-between">
+          <span className="flex items-center space-x-2">
+            <CheckCircle2 className="h-5 w-5" />
+            <span>{successMessage}</span>
+          </span>
+          <button
+            onClick={() => setSuccessMessage(null)}
+            className="text-green-700 hover:text-green-900"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Leave Requests Table */}
       <Card title="Leave Requests">
         {leaveRequests.length > 0 && (
@@ -402,6 +469,8 @@ export default function LeaveManagementPage() {
         <LeaveApprovalTable
           requests={paginatedRequests}
           onUpdate={fetchData}
+          selectedLeaveIds={selectedLeaveIds}
+          onSelectionChange={setSelectedLeaveIds}
         />
         {totalPages > 1 && (
           <Pagination
@@ -426,6 +495,35 @@ export default function LeaveManagementPage() {
           onSuccess={handleRequestSuccess}
         />
       )}
+
+      {/* Bulk Approve Confirmation Modal */}
+      <Modal
+        isOpen={showBulkApproveModal}
+        onClose={() => setShowBulkApproveModal(false)}
+        title="Bulk Approve Leave Requests"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Are you sure you want to approve {selectedLeaveIds.length} selected leave request{selectedLeaveIds.length !== 1 ? 's' : ''}?
+          </p>
+          <div className="flex justify-end space-x-3 pt-4">
+            <button
+              type="button"
+              onClick={() => setShowBulkApproveModal(false)}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleBulkApprove}
+              disabled={isBulkApproving}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isBulkApproving ? 'Approving...' : 'Approve Selected'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

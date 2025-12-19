@@ -4,8 +4,9 @@ import React from 'react';
 
 interface Column<T> {
   key: string;
-  header: string;
+  header: string | React.ReactNode;
   render?: (item: T) => React.ReactNode;
+  renderHeader?: () => React.ReactNode;
 }
 
 interface TableProps<T> {
@@ -43,10 +44,11 @@ export default function Table<T>({
                   className={`px-3 sm:px-4 py-2.5 text-xs font-semibold text-gray-700 uppercase tracking-wider ${
                     column.key === 'image' ? 'min-w-[120px] text-center' :
                     column.key === 'location' ? 'min-w-[140px]' :
+                    column.key === 'checkbox' ? 'w-12 text-center' :
                     'text-left'
                   }`}
                 >
-                  {column.header}
+                  {column.renderHeader ? column.renderHeader() : column.header}
                 </th>
               ))}
             </tr>
@@ -58,20 +60,21 @@ export default function Table<T>({
                 onClick={() => onRowClick?.(item)}
                 className={`${onRowClick ? 'cursor-pointer' : ''} hover:bg-gray-50/50 transition-colors border-b border-gray-100`}
               >
-                {columns.map((column) => (
-                  <td 
-                    key={column.key} 
-                    className={`px-3 sm:px-4 py-2.5 text-sm text-gray-900 align-middle ${
-                      column.key === 'image' || column.key === 'location' 
-                        ? 'break-words' 
-                        : 'whitespace-nowrap'
-                    }`}
-                  >
-                    {column.render
-                      ? column.render(item)
-                      : (item as any)[column.key]}
-                  </td>
-                ))}
+                  {columns.map((column) => (
+                <td 
+                  key={column.key} 
+                  className={`px-3 sm:px-4 py-2.5 text-sm text-gray-900 align-middle ${
+                    column.key === 'checkbox' ? 'text-center' :
+                    column.key === 'image' || column.key === 'location' 
+                      ? 'break-words' 
+                      : 'whitespace-nowrap'
+                  }`}
+                >
+                  {column.render
+                    ? column.render(item)
+                    : (item as any)[column.key]}
+                </td>
+              ))}
               </tr>
             ))}
           </tbody>

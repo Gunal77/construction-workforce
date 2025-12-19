@@ -5,10 +5,11 @@ const { signToken } = require('../utils/jwt');
 /**
  * Unified Login for ALL user types (admin, client, supervisor, staff)
  * Uses the users table with role-based access control
+ * Enforces role-based access: admin -> admin portal, staff -> mobile app
  */
 const unifiedLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, source } = req.body; // source: 'admin-portal' or 'mobile-app'
 
     if (!email || !password) {
       return res.status(400).json({ 
@@ -19,7 +20,7 @@ const unifiedLogin = async (req, res) => {
 
     const normalizedEmail = email.toString().trim().toLowerCase();
 
-    // Query unified users table
+    // Query unified users table with profile status
     const query = `
       SELECT 
         u.id,
@@ -30,8 +31,15 @@ const unifiedLogin = async (req, res) => {
         u.name,
         u.phone,
         u.is_active,
-        u.profile_id
+        u.profile_id,
+        CASE 
+          WHEN u.role = 'admin' THEN a.status
+          WHEN u.role = 'staff' THEN e.status
+          ELSE 'active'
+        END as profile_status
       FROM users u
+      LEFT JOIN admins a ON a.user_id = u.id
+      LEFT JOIN employees e ON e.user_id = u.id
       WHERE LOWER(u.email) = $1
     `;
 
@@ -46,11 +54,34 @@ const unifiedLogin = async (req, res) => {
 
     const user = result.rows[0];
 
-    // Check if user is active
+    // Check if user is active in users table
     if (!user.is_active) {
       return res.status(403).json({ 
         success: false,
         message: 'Account is inactive. Please contact administrator.' 
+      });
+    }
+
+    // Check profile status (for admin and staff)
+    if (user.profile_status === 'inactive') {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Account is inactive. Please contact administrator.' 
+      });
+    }
+
+    // Enforce role-based access control
+    if (user.role === 'admin' && source === 'mobile-app') {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Admin accounts can only access the Admin Portal. Please use the web application.' 
+      });
+    }
+
+    if (user.role === 'staff' && source === 'admin-portal') {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Staff accounts can only access the Mobile App. Please use the mobile application.' 
       });
     }
 
