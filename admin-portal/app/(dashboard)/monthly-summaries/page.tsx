@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Calendar, Clock, FileText, CheckCircle2, XCircle, AlertCircle, Search, Download, FileSpreadsheet } from 'lucide-react';
+import { Calendar, Clock, FileText, CheckCircle2, XCircle, AlertCircle, Search, Download, FileSpreadsheet, CheckSquare } from 'lucide-react';
 import Table from '@/components/Table';
 import Modal from '@/components/Modal';
 import SignaturePad from '@/components/SignaturePad';
@@ -52,6 +52,11 @@ export default function MonthlySummariesPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [selectedSummaryIds, setSelectedSummaryIds] = useState<string[]>([]);
+  const [showBulkApproveModal, setShowBulkApproveModal] = useState(false);
+  const [isBulkApproving, setIsBulkApproving] = useState(false);
+  const [bulkApproveSignature, setBulkApproveSignature] = useState('');
+  const [bulkApproveRemarks, setBulkApproveRemarks] = useState('');
 
   useEffect(() => {
     fetchSummaries();
@@ -326,7 +331,119 @@ export default function MonthlySummariesPage() {
     );
   };
 
+  // Handle checkbox selection
+  const handleCheckboxChange = (summaryId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedSummaryIds([...selectedSummaryIds, summaryId]);
+    } else {
+      setSelectedSummaryIds(selectedSummaryIds.filter(id => id !== summaryId));
+    }
+  };
+
+  // Handle select all
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      // Only select SIGNED_BY_STAFF summaries
+      const signableIds = filteredSummaries
+        .filter(s => s.status === 'SIGNED_BY_STAFF')
+        .map(s => s.id);
+      setSelectedSummaryIds(signableIds);
+    } else {
+      setSelectedSummaryIds([]);
+    }
+  };
+
+  // Check if all SIGNED_BY_STAFF summaries are selected
+  const allSignedSelected = filteredSummaries
+    .filter(s => s.status === 'SIGNED_BY_STAFF')
+    .every(s => selectedSummaryIds.includes(s.id));
+  
+  const someSignedSelected = filteredSummaries
+    .filter(s => s.status === 'SIGNED_BY_STAFF')
+    .some(s => selectedSummaryIds.includes(s.id));
+
+  // Handle bulk approve
+  const handleBulkApprove = async () => {
+    if (!bulkApproveSignature) {
+      setError('Please provide your signature for bulk approval');
+      return;
+    }
+
+    if (selectedSummaryIds.length === 0) return;
+
+    try {
+      setIsBulkApproving(true);
+      setError('');
+
+      const response = await fetch('/api/proxy/monthly-summaries/bulk-approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          summaryIds: selectedSummaryIds,
+          signature: bulkApproveSignature,
+          remarks: bulkApproveRemarks || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to bulk approve summaries' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to bulk approve monthly summaries');
+      }
+
+      setShowBulkApproveModal(false);
+      setBulkApproveSignature('');
+      setBulkApproveRemarks('');
+      setSelectedSummaryIds([]);
+      fetchSummaries();
+    } catch (err: any) {
+      setError(err.message || 'Failed to bulk approve monthly summaries');
+    } finally {
+      setIsBulkApproving(false);
+    }
+  };
+
   const columns = [
+    {
+      key: 'checkbox',
+      header: (
+        <div className="flex items-center justify-center h-full">
+          <input
+            type="checkbox"
+            checked={allSignedSelected && filteredSummaries.filter(s => s.status === 'SIGNED_BY_STAFF').length > 0}
+            ref={(input) => {
+              if (input) input.indeterminate = someSignedSelected && !allSignedSelected;
+            }}
+            onChange={(e) => handleSelectAll(e.target.checked)}
+            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
+          />
+        </div>
+      ),
+      renderHeader: () => (
+        <div className="flex items-center justify-center h-full">
+          <input
+            type="checkbox"
+            checked={allSignedSelected && filteredSummaries.filter(s => s.status === 'SIGNED_BY_STAFF').length > 0}
+            ref={(input) => {
+              if (input) input.indeterminate = someSignedSelected && !allSignedSelected;
+            }}
+            onChange={(e) => handleSelectAll(e.target.checked)}
+            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
+          />
+        </div>
+      ),
+      render: (item: MonthlySummary) => (
+        <div className="flex items-center justify-center h-full">
+          <input
+            type="checkbox"
+            checked={selectedSummaryIds.includes(item.id)}
+            onChange={(e) => handleCheckboxChange(item.id, e.target.checked)}
+            disabled={item.status !== 'SIGNED_BY_STAFF'}
+            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+        </div>
+      ),
+    },
     {
       key: 'employee',
       header: 'Staff',
@@ -428,6 +545,14 @@ export default function MonthlySummariesPage() {
           <p className="text-gray-600 mt-1">Review and approve staff-signed monthly summaries</p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={() => setShowBulkApproveModal(true)}
+            disabled={selectedSummaryIds.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <CheckSquare className="h-4 w-4" />
+            <span>Bulk Approve ({selectedSummaryIds.length})</span>
+          </button>
           <button
             onClick={handleExportPDF}
             disabled={isExportingPDF || filteredSummaries.filter(s => s.status === 'APPROVED').length === 0}
@@ -664,6 +789,76 @@ export default function MonthlySummariesPage() {
               className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isProcessing ? 'Rejecting...' : 'Reject'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Bulk Approve Modal */}
+      <Modal
+        isOpen={showBulkApproveModal}
+        onClose={() => {
+          setShowBulkApproveModal(false);
+          setBulkApproveSignature('');
+          setBulkApproveRemarks('');
+          setError('');
+        }}
+        title="Bulk Approve Monthly Summaries"
+        size="md"
+      >
+        <div className="space-y-4">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
+              {error}
+            </div>
+          )}
+
+          <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded text-sm">
+            You are about to approve {selectedSummaryIds.length} monthly summary/summaries. Please provide your e-signature. This signature will be applied to all selected summaries.
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Remarks (Optional)
+            </label>
+            <textarea
+              value={bulkApproveRemarks}
+              onChange={(e) => setBulkApproveRemarks(e.target.value)}
+              rows={3}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              placeholder="Add any remarks or notes..."
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              E-Signature *
+            </label>
+            <SignaturePad
+              onSave={(signature) => setBulkApproveSignature(signature)}
+              onClear={() => setBulkApproveSignature('')}
+              disabled={isBulkApproving}
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <button
+              onClick={() => {
+                setShowBulkApproveModal(false);
+                setBulkApproveSignature('');
+                setBulkApproveRemarks('');
+                setError('');
+              }}
+              className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleBulkApprove}
+              disabled={!bulkApproveSignature || isBulkApproving}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isBulkApproving ? 'Approving...' : `Approve ${selectedSummaryIds.length} Summary${selectedSummaryIds.length !== 1 ? 'ies' : ''}`}
             </button>
           </div>
         </div>

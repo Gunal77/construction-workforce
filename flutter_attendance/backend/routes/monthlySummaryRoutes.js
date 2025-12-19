@@ -70,6 +70,7 @@ router.get('/list', adminMiddleware, monthlySummaryController.getMonthlySummarie
 router.get('/:id', adminMiddleware, monthlySummaryController.getMonthlySummaryById);
 router.post('/:id/approve', adminMiddleware, monthlySummaryController.adminApproveReject);
 router.post('/:id/reject', adminMiddleware, monthlySummaryController.adminApproveReject);
+router.post('/bulk-approve', adminMiddleware, monthlySummaryController.bulkApproveMonthlySummaries);
 
 // Staff routes
 router.get('/staff/list', staffMiddleware, monthlySummaryController.getStaffMonthlySummaries);

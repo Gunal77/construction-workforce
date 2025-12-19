@@ -733,6 +733,104 @@ const getStaffMonthlySummaries = async (req, res) => {
   }
 };
 
+/**
+ * Bulk approve monthly summaries
+ */
+const bulkApproveMonthlySummaries = async (req, res) => {
+  try {
+    const { summaryIds, signature, remarks } = req.body;
+    const adminId = req.user?.id;
+
+    if (!summaryIds || !Array.isArray(summaryIds) || summaryIds.length === 0) {
+      return res.status(400).json({ message: 'Summary IDs array is required' });
+    }
+
+    if (!signature) {
+      return res.status(400).json({ message: 'Admin signature is required for bulk approval' });
+    }
+
+    // Validate all summaries exist and are SIGNED_BY_STAFF
+    const { rows: existingSummaries } = await db.query(
+      `SELECT id, status, employee_id FROM monthly_summaries WHERE id = ANY($1::uuid[])`,
+      [summaryIds]
+    );
+
+    if (existingSummaries.length !== summaryIds.length) {
+      return res.status(400).json({ message: 'One or more monthly summaries not found' });
+    }
+
+    // Check all are SIGNED_BY_STAFF
+    const nonSignedSummaries = existingSummaries.filter(s => s.status !== 'SIGNED_BY_STAFF');
+    if (nonSignedSummaries.length > 0) {
+      return res.status(400).json({ 
+        message: `Cannot approve ${nonSignedSummaries.length} summary/summaries that are not signed by staff` 
+      });
+    }
+
+    // Bulk update all summaries
+    const updateResult = await db.query(
+      `UPDATE monthly_summaries 
+       SET 
+         admin_signature = $1,
+         admin_approved_at = NOW(),
+         admin_approved_by = $2,
+         admin_remarks = $3,
+         status = 'APPROVED',
+         updated_at = NOW()
+       WHERE id = ANY($4::uuid[]) AND status = 'SIGNED_BY_STAFF'
+       RETURNING *`,
+      [signature, adminId, remarks || null, summaryIds]
+    );
+
+    const approvedSummaries = updateResult.rows;
+
+    // Send email notifications (async, don't wait)
+    (async () => {
+      for (const summary of approvedSummaries) {
+        try {
+          // Get employee details
+          const { rows: empRows } = await db.query(
+            'SELECT name, email FROM employees WHERE id = $1',
+            [summary.employee_id]
+          );
+          const { rows: adminRows } = await db.query(
+            'SELECT name, email FROM admins WHERE id = $1',
+            [adminId]
+          );
+          
+          if (empRows.length > 0) {
+            const employee = empRows[0];
+            const adminName = adminRows[0]?.name || 'Administrator';
+            
+            await emailService.sendMonthlySummaryStatusNotification(
+              summary,
+              employee,
+              'APPROVED',
+              adminName,
+              remarks || null
+            );
+          }
+        } catch (emailError) {
+          console.error(`Failed to send email notification for summary ${summary.id}:`, emailError);
+          // Don't fail the bulk operation if email fails
+        }
+      }
+    })();
+
+    return res.json({
+      message: `${approvedSummaries.length} monthly summary/summaries approved successfully`,
+      approvedCount: approvedSummaries.length,
+      summaries: approvedSummaries,
+    });
+  } catch (error) {
+    console.error('Bulk approve monthly summaries error', error);
+    return res.status(500).json({ 
+      message: 'Failed to bulk approve monthly summaries',
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   generateMonthlySummary,
   generateMonthlySummariesForAllStaff,
@@ -740,6 +838,7 @@ module.exports = {
   getMonthlySummaryById,
   staffSignOff,
   adminApproveReject,
+  bulkApproveMonthlySummaries,
   getStaffMonthlySummaries,
 };
 
