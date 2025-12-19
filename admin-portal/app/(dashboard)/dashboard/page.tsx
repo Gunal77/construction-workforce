@@ -107,7 +107,10 @@ async function getDashboardData() {
     ).size;
 
     const absentToday = employees.length - presentToday;
-    const recentActivity = attendanceRecords.slice(0, 10);
+    // Get recent activity - ensure we have valid records with check_in_time
+    const recentActivity = attendanceRecords
+      .filter((record: AttendanceRecord) => record.check_in_time)
+      .slice(0, 10);
 
     // Calculate supervisors count from supervisors API
     const supervisorsCount = supervisors.length;

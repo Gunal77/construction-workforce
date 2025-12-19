@@ -9,7 +9,7 @@ import DateRangeFilter, { DateRange, CompareDateRange } from '@/components/DateR
 import LastEndDateBadge from '@/components/LastEndDateBadge';
 import LeaveApprovalTable from '@/components/LeaveApprovalTable';
 import WorkerAttendanceReportTable from '@/components/WorkerAttendanceReportTable';
-import { FolderKanban, Users as UsersIcon, Clock as ClockIcon, DollarSign, Calendar, Filter } from 'lucide-react';
+import { FolderKanban, Users as UsersIcon, Clock as ClockIcon, DollarSign, Calendar, Filter, Download, FileSpreadsheet } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 
 interface ReportsData {
@@ -63,6 +63,8 @@ export default function ReportsPage() {
   const [projectReportsPage, setProjectReportsPage] = useState(1);
   const [workerReportsPage, setWorkerReportsPage] = useState(1);
   const [leaveRequestsPage, setLeaveRequestsPage] = useState(1);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
   
   const ITEMS_PER_PAGE = 10;
 
@@ -472,6 +474,78 @@ export default function ReportsPage() {
     }, 100);
   }, []);
 
+  const handleExportPDF = async () => {
+    try {
+      setIsExportingPDF(true);
+      
+      const params = new URLSearchParams();
+      const fromDateStr = fromDate.toISOString().split('T')[0];
+      const toDateStr = toDate.toISOString().split('T')[0];
+      params.append('from', fromDateStr);
+      params.append('to', toDateStr);
+      
+      // Export attendance report which includes the report data
+      const response = await fetch(`/api/proxy/export/attendance/pdf?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to export PDF' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to export PDF');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reports-${fromDateStr}_to_${toDateStr}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      console.error('Export PDF error:', err);
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      setIsExportingExcel(true);
+      
+      const params = new URLSearchParams();
+      const fromDateStr = fromDate.toISOString().split('T')[0];
+      const toDateStr = toDate.toISOString().split('T')[0];
+      params.append('from', fromDateStr);
+      params.append('to', toDateStr);
+      
+      // Export attendance report which includes the report data
+      const response = await fetch(`/api/proxy/export/attendance/excel?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to export Excel' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to export Excel');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reports-${fromDateStr}_to_${toDateStr}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      console.error('Export Excel error:', err);
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
   const getTrendLabel = () => {
     if (compareRange?.enabled) {
       if (compareRange.type === 'previous-year') {
@@ -530,9 +604,29 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div>
-        <h1 className="text-xl md:text-2xl font-bold text-gray-800">Reports & Analytics</h1>
-        <p className="text-sm md:text-base text-gray-600 mt-1">Comprehensive project, attendance, and performance reports</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-800">Reports & Analytics</h1>
+          <p className="text-sm md:text-base text-gray-600 mt-1">Comprehensive project, attendance, and performance reports</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExportPDF}
+            disabled={isExportingPDF || reportsData.projectReports.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className={`h-4 w-4 ${isExportingPDF ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Export PDF</span>
+          </button>
+          <button
+            onClick={handleExportExcel}
+            disabled={isExportingExcel || reportsData.projectReports.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <FileSpreadsheet className={`h-4 w-4 ${isExportingExcel ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Export Excel</span>
+          </button>
+        </div>
       </div>
 
       {/* Date Range Filter */}

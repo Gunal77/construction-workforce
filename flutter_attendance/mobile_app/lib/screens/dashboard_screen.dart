@@ -7,6 +7,9 @@ import '../widgets/custom_app_bar.dart';
 import 'attendance_history_screen.dart';
 import 'check_in_out_screen.dart';
 import 'profile_screen.dart';
+import 'monthly_summaries_screen.dart';
+import 'apply_leave_screen.dart';
+import 'my_leave_requests_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
@@ -107,6 +110,7 @@ class _DashboardHome extends StatefulWidget {
 class _DashboardHomeState extends State<_DashboardHome> {
   List<dynamic> _recentRecords = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -117,6 +121,7 @@ class _DashboardHomeState extends State<_DashboardHome> {
   Future<void> _loadRecentRecords() async {
     setState(() {
       _isLoading = true;
+      _errorMessage = null;
     });
     try {
       final records = await ApiService().fetchMyAttendance();
@@ -124,12 +129,16 @@ class _DashboardHomeState extends State<_DashboardHome> {
         setState(() {
           _recentRecords = records.take(5).toList();
           _isLoading = false;
+          _errorMessage = null;
         });
       }
     } catch (error) {
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _errorMessage = error is ApiException 
+              ? error.message 
+              : 'Failed to fetch attendance records';
         });
       }
     }
@@ -230,6 +239,122 @@ class _DashboardHomeState extends State<_DashboardHome> {
                   ),
                 ],
               ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: _QuickActionCard(
+                      icon: Icons.event_available,
+                      title: 'Apply Leave',
+                      color: Colors.orange,
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ApplyLeaveScreen(),
+                          ),
+                        ).then((success) {
+                          if (success == true) {
+                            // Refresh if leave was submitted successfully
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Leave request submitted successfully'),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          }
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _QuickActionCard(
+                      icon: Icons.list_alt,
+                      title: 'My Leaves',
+                      color: Colors.teal,
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const MyLeaveRequestsScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 32),
+              // Monthly Summaries Card
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => MonthlySummariesScreen(
+                          onBackPressed: () {
+                            Navigator.pop(context);
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.purple.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.description,
+                            size: 32,
+                            color: Colors.purple,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Monthly Summaries',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textColor,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Review and sign your monthly summaries',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: AppTheme.textColor.withOpacity(0.6),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right,
+                          color: AppTheme.textColor.withOpacity(0.4),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
               const SizedBox(height: 32),
               // Recent Attendance
               Row(
@@ -262,6 +387,42 @@ class _DashboardHomeState extends State<_DashboardHome> {
                   child: Padding(
                     padding: EdgeInsets.all(32.0),
                     child: CircularProgressIndicator(),
+                  ),
+                )
+              else if (_errorMessage != null)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.errorColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: AppTheme.errorColor.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        color: AppTheme.errorColor,
+                        size: 24,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            color: AppTheme.errorColor,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh),
+                        color: AppTheme.errorColor,
+                        onPressed: _loadRecentRecords,
+                        tooltip: 'Retry',
+                      ),
+                    ],
                   ),
                 )
               else if (_recentRecords.isEmpty)

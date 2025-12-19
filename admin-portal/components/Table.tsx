@@ -35,27 +35,38 @@ export default function Table<T>({
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden w-full max-w-full min-w-0">
       <div className="overflow-x-auto max-w-full min-w-0">
         <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+          <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider"
+                  className={`px-3 sm:px-4 py-2.5 text-xs font-semibold text-gray-700 uppercase tracking-wider ${
+                    column.key === 'image' ? 'min-w-[120px] text-center' :
+                    column.key === 'location' ? 'min-w-[140px]' :
+                    'text-left'
+                  }`}
                 >
                   {column.header}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          <tbody className="bg-white divide-y divide-gray-100">
             {data.map((item) => (
               <tr
                 key={keyExtractor(item)}
                 onClick={() => onRowClick?.(item)}
-                className={onRowClick ? 'cursor-pointer hover:bg-gray-50' : ''}
+                className={`${onRowClick ? 'cursor-pointer' : ''} hover:bg-gray-50/50 transition-colors border-b border-gray-100`}
               >
                 {columns.map((column) => (
-                  <td key={column.key} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  <td 
+                    key={column.key} 
+                    className={`px-3 sm:px-4 py-2.5 text-sm text-gray-900 align-middle ${
+                      column.key === 'image' || column.key === 'location' 
+                        ? 'break-words' 
+                        : 'whitespace-nowrap'
+                    }`}
+                  >
                     {column.render
                       ? column.render(item)
                       : (item as any)[column.key]}

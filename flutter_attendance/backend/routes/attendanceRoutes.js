@@ -30,7 +30,12 @@ router.post(
   attendanceController.checkIn,
 );
 
-router.post('/check-out', authMiddleware, attendanceController.checkOut);
+router.post(
+  '/check-out',
+  authMiddleware,
+  upload.single('image'),
+  attendanceController.checkOut,
+);
 router.get('/me', authMiddleware, attendanceController.getMyAttendance);
 router.get('/admin/all', adminAuthMiddleware, attendanceController.getAllAttendance);
 router.get('/admin/last-end-dates', adminAuthMiddleware, attendanceController.getLastEndDates);

@@ -81,6 +81,249 @@ class ApiService {
     _adminEmail = null;
   }
 
+  // Monthly Summaries API
+  Future<List<dynamic>> fetchMonthlySummaries({int? month, int? year}) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final queryParams = <String, String>{};
+    if (month != null) queryParams['month'] = month.toString();
+    if (year != null) queryParams['year'] = year.toString();
+
+    final uri = Uri.parse('$_baseUrl/monthly-summaries/staff/list')
+        .replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
+
+    final response = await _client.get(
+      uri,
+      headers: {
+        HttpHeaders.authorizationHeader: 'Bearer $_token',
+        HttpHeaders.acceptHeader: 'application/json',
+      },
+    );
+
+    final data = _decodeResponse(response);
+    return data['summaries'] ?? [];
+  }
+
+  Future<Map<String, dynamic>> fetchMonthlySummaryById(String id) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final uri = Uri.parse('$_baseUrl/monthly-summaries/staff/$id');
+
+    final response = await _client.get(
+      uri,
+      headers: {
+        HttpHeaders.authorizationHeader: 'Bearer $_token',
+        HttpHeaders.acceptHeader: 'application/json',
+      },
+    );
+
+    return _decodeResponse(response);
+  }
+
+  // Leave Requests API
+  Future<List<dynamic>> fetchLeaveTypes() async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final response = await _client.get(
+      Uri.parse('$_baseUrl/leave/staff/types'),
+      headers: {
+        'Authorization': 'Bearer $_token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['leaveTypes'] as List<dynamic>;
+    } else {
+      final error = jsonDecode(response.body) as Map<String, dynamic>;
+      throw ApiException(
+        error['message'] ?? 'Failed to fetch leave types',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  Future<List<dynamic>> fetchEmployeesForStandIn() async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final response = await _client.get(
+      Uri.parse('$_baseUrl/leave/staff/employees'),
+      headers: {
+        'Authorization': 'Bearer $_token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['employees'] as List<dynamic>;
+    } else {
+      final error = jsonDecode(response.body) as Map<String, dynamic>;
+      throw ApiException(
+        error['message'] ?? 'Failed to fetch employees',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  Future<List<dynamic>> fetchLeaveBalance() async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final response = await _client.get(
+      Uri.parse('$_baseUrl/leave/staff/balance'),
+      headers: {
+        'Authorization': 'Bearer $_token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['balances'] as List<dynamic>;
+    } else {
+      final error = jsonDecode(response.body) as Map<String, dynamic>;
+      throw ApiException(
+        error['message'] ?? 'Failed to fetch leave balance',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  Future<List<dynamic>> fetchLeaveRequests({String? status}) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final queryParams = <String, String>{};
+    if (status != null && status.isNotEmpty) {
+      queryParams['status'] = status;
+    }
+
+    final uri = Uri.parse('$_baseUrl/leave/staff/requests')
+        .replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
+
+    final response = await _client.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $_token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['requests'] as List<dynamic>;
+    } else {
+      final error = jsonDecode(response.body) as Map<String, dynamic>;
+      throw ApiException(
+        error['message'] ?? 'Failed to fetch leave requests',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> createLeaveRequest({
+    required String leaveTypeId,
+    required String startDate,
+    required String endDate,
+    String? reason,
+    String? standInEmployeeId,
+    File? mcDocument,
+  }) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_baseUrl/leave/staff/requests'),
+    );
+
+    request.headers.addAll({
+      'Authorization': 'Bearer $_token',
+    });
+
+    request.fields['leaveTypeId'] = leaveTypeId;
+    request.fields['startDate'] = startDate;
+    request.fields['endDate'] = endDate;
+    if (reason != null && reason.isNotEmpty) {
+      request.fields['reason'] = reason;
+    }
+    if (standInEmployeeId != null && standInEmployeeId.isNotEmpty) {
+      request.fields['standInEmployeeId'] = standInEmployeeId;
+    }
+
+    // Add MC document if provided
+    if (mcDocument != null) {
+      final fileStream = http.ByteStream(mcDocument.openRead());
+      final fileLength = await mcDocument.length();
+      final multipartFile = http.MultipartFile(
+        'mcDocument',
+        fileStream,
+        fileLength,
+        filename: mcDocument.path.split('/').last,
+      );
+      request.files.add(multipartFile);
+    }
+
+    final streamedResponse = await _client.send(request);
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } else {
+      Map<String, dynamic> error;
+      try {
+        error = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (e) {
+        error = {'message': 'Failed to create leave request. Status: ${response.statusCode}. Response: ${response.body}'};
+      }
+      throw ApiException(
+        error['message'] ?? 'Failed to create leave request',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> signMonthlySummary(String id, String signature) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final uri = Uri.parse('$_baseUrl/monthly-summaries/staff/$id/sign');
+
+    final response = await _client.post(
+      uri,
+      headers: {
+        HttpHeaders.authorizationHeader: 'Bearer $_token',
+        HttpHeaders.contentTypeHeader: 'application/json',
+        HttpHeaders.acceptHeader: 'application/json',
+      },
+      body: jsonEncode({'signature': signature}),
+    );
+
+    return _decodeResponse(response);
+  }
+
   Future<Map<String, dynamic>> login(String email, String password) async {
     final uri = Uri.parse('$_baseUrl/auth/login');
     final response = await _client.post(
@@ -156,23 +399,27 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> checkOut({
-    double? latitude,
-    double? longitude,
+    required File imageFile,
+    required double latitude,
+    required double longitude,
   }) async {
     final token = _requireToken();
     final uri = Uri.parse('$_baseUrl/attendance/check-out');
-    final body = <String, dynamic>{};
-    if (latitude != null) body['latitude'] = latitude;
-    if (longitude != null) body['longitude'] = longitude;
-    
-    final response = await _client.post(
-      uri,
-      headers: {
-        ..._authHeaders(token),
-        HttpHeaders.contentTypeHeader: 'application/json',
-      },
-      body: jsonEncode(body),
-    );
+
+    final request = http.MultipartRequest('POST', uri)
+      ..headers.addAll(_authHeaders(token))
+      ..fields['latitude'] = latitude.toString()
+      ..fields['longitude'] = longitude.toString()
+      ..files.add(
+        await http.MultipartFile.fromPath(
+          'image',
+          imageFile.path,
+          filename: imageFile.uri.pathSegments.last,
+        ),
+      );
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
 
     return _decodeResponse(response);
   }

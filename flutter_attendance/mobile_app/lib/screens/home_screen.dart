@@ -116,23 +116,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleCheckOut() async {
-    setState(() {
-      _isCheckingOut = true;
-    });
-
-    try {
-      await ApiService().checkOut();
-      _showMessage('Check-out successful');
-      await _loadInitialData();
-    } catch (error) {
-      _showMessage(error is ApiException ? error.message : 'Check-out failed');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isCheckingOut = false;
-        });
-      }
-    }
+    // Note: This screen is deprecated. Check-out should be done through CheckInOutScreen
+    // which requires photo capture. This method is kept for backward compatibility.
+    _showMessage('Please use the Check In/Out screen to check out. Photo capture is required.');
   }
 
   Future<void> _handleLogout() async {

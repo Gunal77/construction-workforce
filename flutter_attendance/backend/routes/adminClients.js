@@ -36,6 +36,13 @@ router.get('/', async (req, res) => {
       paramCount++;
     }
     
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+      const isActiveBool = isActive === 'true' || isActive === true;
+      query += ` AND COALESCE(u.is_active, TRUE) = $${paramCount}`;
+      values.push(isActiveBool);
+      paramCount++;
+    }
+    
     // Validate sortBy to prevent SQL injection
     const allowedSortColumns = ['name', 'email', 'created_at', 'updated_at'];
     const safeSort = allowedSortColumns.includes(sortBy) ? sortBy : 'created_at';

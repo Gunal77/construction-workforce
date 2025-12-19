@@ -8,8 +8,10 @@ const supervisorAuthRoutes = require('./routes/supervisorAuth');
 const unifiedAuthRoutes = require('./routes/unifiedAuth'); // NEW: Unified authentication
 const supervisorRoutes = require('./routes/supervisorRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
+const monthlySummaryRoutes = require('./routes/monthlySummaryRoutes');
 const leaveRoutes = require('./routes/leaveRoutes');
 const timesheetRoutes = require('./routes/timesheetRoutes');
+const exportRoutes = require('./routes/exportRoutes');
 const adminProjectsRoutes = require('./routes/adminProjects');
 const adminEmployeesRoutes = require('./routes/adminEmployees');
 const adminClientsRoutes = require('./routes/adminClients');
@@ -37,8 +39,10 @@ app.use(['/api/admin/auth', '/admin/auth'], adminAuthRoutes); // Legacy
 app.use(['/api/supervisor/auth', '/supervisor/auth'], supervisorAuthRoutes); // Legacy
 app.use(['/api/supervisor', '/supervisor'], supervisorRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/monthly-summaries', monthlySummaryRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/timesheets', timesheetRoutes);
+app.use('/api/export', exportRoutes);
 // Register employee assignment routes first (more specific routes)
 app.use(['/api/admin/projects', '/admin/projects'], projectEmployeesRoutes);
 app.use(['/api/admin/projects', '/admin/projects'], adminProjectsRoutes);

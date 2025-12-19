@@ -17,6 +17,7 @@ import {
   X,
   UserSquare2,
   UserCog,
+  ClipboardCheck,
 } from 'lucide-react';
 
 const menuItems = [
@@ -28,6 +29,7 @@ const menuItems = [
   { href: '/attendance', label: 'Attendance', icon: Clock },
   { href: '/timesheets', label: 'Timesheets', icon: Timer },
   { href: '/leave', label: 'Leave Management', icon: Calendar },
+  { href: '/monthly-summaries', label: 'Monthly Summaries', icon: ClipboardCheck },
   { href: '/reports', label: 'Reports', icon: FileText },
 ];
 
@@ -112,7 +114,7 @@ export default function Sidebar() {
                 }`}
               >
                 <Icon className="h-5 w-5" />
-                <span className="font-medium">{item.label}</span>
+                <span className="text-sm font-medium">{item.label}</span>
               </Link>
             );
           })}
@@ -123,7 +125,7 @@ export default function Sidebar() {
               <span className="text-white text-sm font-medium">A</span>
             </div>
             <div className="flex-1">
-              <p className="text-sm font-medium text-gray-900">Admin User</p>
+              <p className="text-xs font-medium text-gray-900">Admin User</p>
               <p className="text-xs text-gray-500">Admin</p>
             </div>
           </div>
@@ -132,7 +134,7 @@ export default function Sidebar() {
             className="flex w-full items-center space-x-3 rounded-lg px-4 py-3 text-gray-700 transition-colors hover:bg-gray-50"
           >
             <LogOut className="h-5 w-5" />
-            <span className="font-medium">Sign Out</span>
+            <span className="text-sm font-medium">Sign Out</span>
           </button>
         </div>
       </div>

@@ -76,24 +76,71 @@ const checkOut = async (req, res) => {
       return res.status(400).json({ message: 'No active attendance session found' });
     }
 
+    if (!req.file) {
+      return res.status(400).json({ message: 'Image file is required for check-out' });
+    }
+
+    const latitude = parseCoordinate(req.body.latitude ?? req.body.lat);
+    const longitude = parseCoordinate(req.body.longitude ?? req.body.long ?? req.body.lng);
+
+    if (latitude === null || longitude === null) {
+      return res.status(400).json({ message: 'Latitude and longitude are required' });
+    }
+
     const attendanceId = rows[0].id;
     const checkOutTime = new Date().toISOString();
+    const checkoutImageUrl = await uploadAttendanceImage(req.file, userId);
 
-    const result = await db.query(
-      `UPDATE attendance_logs
-          SET check_out_time = $1
-        WHERE id = $2
-        RETURNING id, user_id, check_in_time, check_out_time, image_url, latitude, longitude`,
-      [checkOutTime, attendanceId],
-    );
+    // Try to update with new checkout columns first (if migration has been run)
+    try {
+      const result = await db.query(
+        `UPDATE attendance_logs
+            SET check_out_time = $1,
+                checkout_image_url = $2,
+                checkout_latitude = $3,
+                checkout_longitude = $4
+          WHERE id = $5
+          RETURNING id, user_id, check_in_time, check_out_time, image_url, latitude, longitude, checkout_image_url, checkout_latitude, checkout_longitude`,
+        [checkOutTime, checkoutImageUrl, latitude, longitude, attendanceId],
+      );
 
-    return res.json({
-      message: 'Check-out successful',
-      attendance: result.rows[0],
-    });
+      return res.json({
+        message: 'Check-out successful',
+        attendance: result.rows[0],
+      });
+    } catch (columnError) {
+      // If new columns don't exist yet (migration not run), fall back to old query
+      if (columnError.code === '42703') { // PostgreSQL error code for undefined column
+        console.log('New checkout columns not found, using backward compatible checkout');
+        const result = await db.query(
+          `UPDATE attendance_logs
+              SET check_out_time = $1
+            WHERE id = $2
+            RETURNING id, user_id, check_in_time, check_out_time, image_url, latitude, longitude`,
+          [checkOutTime, attendanceId],
+        );
+
+        // Add null values for checkout fields to maintain API compatibility
+        const attendance = {
+          ...result.rows[0],
+          checkout_image_url: null,
+          checkout_latitude: null,
+          checkout_longitude: null,
+        };
+
+        return res.json({
+          message: 'Check-out successful',
+          attendance,
+        });
+      }
+      throw columnError; // Re-throw if it's a different error
+    }
   } catch (error) {
     console.error('Check-out error', error);
-    return res.status(500).json({ message: 'Failed to check out' });
+    return res.status(500).json({ 
+      message: 'Failed to check out',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };
 
@@ -101,15 +148,41 @@ const getMyAttendance = async (req, res) => {
   const userId = req.user.id;
 
   try {
-    const { rows } = await db.query(
-      `SELECT id, user_id, check_in_time, check_out_time, image_url, latitude, longitude
-         FROM attendance_logs
-        WHERE user_id = $1
-        ORDER BY check_in_time DESC`,
-      [userId],
-    );
+    // First, try to query with new checkout columns (if migration has been run)
+    try {
+      const { rows } = await db.query(
+        `SELECT id, user_id, check_in_time, check_out_time, image_url, latitude, longitude, checkout_image_url, checkout_latitude, checkout_longitude
+           FROM attendance_logs
+          WHERE user_id = $1
+          ORDER BY check_in_time DESC`,
+        [userId],
+      );
 
-    return res.json({ records: rows });
+      return res.json({ records: rows });
+    } catch (columnError) {
+      // If new columns don't exist yet (migration not run), fall back to old query
+      if (columnError.code === '42703') { // PostgreSQL error code for undefined column
+        console.log('New checkout columns not found, using backward compatible query');
+        const { rows } = await db.query(
+          `SELECT id, user_id, check_in_time, check_out_time, image_url, latitude, longitude
+             FROM attendance_logs
+            WHERE user_id = $1
+            ORDER BY check_in_time DESC`,
+          [userId],
+        );
+
+        // Add null values for checkout fields to maintain API compatibility
+        const recordsWithCheckout = rows.map(row => ({
+          ...row,
+          checkout_image_url: null,
+          checkout_latitude: null,
+          checkout_longitude: null,
+        }));
+
+        return res.json({ records: recordsWithCheckout });
+      }
+      throw columnError; // Re-throw if it's a different error
+    }
   } catch (error) {
     console.error('Get attendance error', error);
     return res.status(500).json({ message: 'Failed to fetch attendance records' });
@@ -193,26 +266,76 @@ const getAllAttendance = async (req, res) => {
     const hasDateFilter = req.query.date || req.query.from || req.query.to || req.query.month || req.query.year;
     const limitClause = hasDateFilter ? '' : 'LIMIT 1000'; // Limit to 1000 records if no date filter
 
-    const query = `
-      SELECT
-        al.id,
-        al.user_id,
-        al.check_in_time,
-        al.check_out_time,
-        al.image_url,
-        al.latitude,
-        al.longitude,
-        u.email AS user_email
-      FROM attendance_logs al
-      LEFT JOIN users u ON u.id = al.user_id
-      ${whereClause}
-      ORDER BY ${orderColumn} ${normalizedSortOrder}, al.created_at ${normalizedSortOrder}
-      ${limitClause}
-    `;
+    // Try to query with new checkout columns first (if migration has been run)
+    try {
+      const query = `
+        SELECT
+          al.id,
+          al.user_id,
+          al.check_in_time,
+          al.check_out_time,
+          al.image_url,
+          al.latitude,
+          al.longitude,
+          al.checkout_image_url,
+          al.checkout_latitude,
+          al.checkout_longitude,
+          u.email AS user_email
+        FROM attendance_logs al
+        LEFT JOIN users u ON u.id = al.user_id
+        ${whereClause}
+        ORDER BY ${orderColumn} ${normalizedSortOrder}, al.created_at ${normalizedSortOrder}
+        ${limitClause}
+      `;
 
-    const { rows } = await db.query(query, values);
+      const { rows } = await db.query(query, values);
+      
+      // Log how many records have checkout data
+      const recordsWithCheckout = rows.filter(r => 
+        r.checkout_image_url || r.checkout_latitude != null || r.checkout_longitude != null
+      );
+      if (recordsWithCheckout.length > 0) {
+        console.log(`[getAllAttendance] Found ${recordsWithCheckout.length} records with checkout data out of ${rows.length} total`);
+      }
 
-    return res.json({ records: rows });
+      return res.json({ records: rows });
+    } catch (columnError) {
+      // If new columns don't exist yet (migration not run), fall back to old query
+      if (columnError.code === '42703') { // PostgreSQL error code for undefined column
+        console.log('⚠️  [getAllAttendance] New checkout columns not found, using backward compatible query');
+        console.log('   Error:', columnError.message);
+        console.log('   Please run migration 024_add_checkout_image_location.sql');
+        const query = `
+          SELECT
+            al.id,
+            al.user_id,
+            al.check_in_time,
+            al.check_out_time,
+            al.image_url,
+            al.latitude,
+            al.longitude,
+            u.email AS user_email
+          FROM attendance_logs al
+          LEFT JOIN users u ON u.id = al.user_id
+          ${whereClause}
+          ORDER BY ${orderColumn} ${normalizedSortOrder}, al.created_at ${normalizedSortOrder}
+          ${limitClause}
+        `;
+
+        const { rows } = await db.query(query, values);
+
+        // Add null values for checkout fields to maintain API compatibility
+        const recordsWithCheckout = rows.map(row => ({
+          ...row,
+          checkout_image_url: null,
+          checkout_latitude: null,
+          checkout_longitude: null,
+        }));
+
+        return res.json({ records: recordsWithCheckout });
+      }
+      throw columnError; // Re-throw if it's a different error
+    }
   } catch (error) {
     console.error('Admin fetch attendance error', error);
     return res.status(500).json({ message: 'Failed to fetch attendance records' });

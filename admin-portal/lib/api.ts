@@ -418,6 +418,9 @@ export interface AttendanceRecord {
   image_url?: string;
   latitude?: number;
   longitude?: number;
+  checkout_image_url?: string;
+  checkout_latitude?: number;
+  checkout_longitude?: number;
 }
 
 export interface LoginResponse {

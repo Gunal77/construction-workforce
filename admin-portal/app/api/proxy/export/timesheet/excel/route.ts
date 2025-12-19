@@ -1,0 +1,48 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+
+async function getAuthToken() {
+  const cookieStore = await cookies();
+  return cookieStore.get('auth_token')?.value || null;
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const token = await getAuthToken();
+
+    if (!token) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const searchParams = request.nextUrl.searchParams;
+    const queryString = searchParams.toString();
+
+    const response = await fetch(`${API_BASE_URL}/api/export/timesheet/excel?${queryString}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Failed to export Excel' }));
+      return NextResponse.json(error, { status: response.status });
+    }
+
+    const blob = await response.blob();
+    return new NextResponse(blob, {
+      headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="timesheet-report.xlsx"`,
+      },
+    });
+  } catch (error: any) {
+    console.error('Export Excel error:', error);
+    return NextResponse.json(
+      { error: 'Failed to export Excel', message: error.message },
+      { status: 500 }
+    );
+  }
+}
+

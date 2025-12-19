@@ -31,8 +31,11 @@ class _CheckInOutScreenState extends State<CheckInOutScreen> {
   bool _isCheckingOut = false;
   bool _isFetchingLocation = false;
   XFile? _selectedImage;
+  XFile? _selectedCheckoutImage;
   double? _latitude;
   double? _longitude;
+  double? _checkoutLatitude;
+  double? _checkoutLongitude;
 
   Future<bool> _requestCameraPermission() async {
     final status = await Permission.camera.request();
@@ -214,11 +217,112 @@ class _CheckInOutScreenState extends State<CheckInOutScreen> {
     }
   }
 
-  Future<void> _handleCheckOut() async {
-    // Fetch location for check-out
-    await _fetchCurrentLocation();
+  Future<void> _pickCheckoutImageFromCamera() async {
+    // Request camera permission
+    final hasCameraPermission = await _requestCameraPermission();
+    if (!hasCameraPermission) {
+      return;
+    }
 
-    if (_latitude == null || _longitude == null) {
+    try {
+      final image = await _imagePicker.pickImage(source: ImageSource.camera);
+      if (image != null && mounted) {
+        setState(() {
+          _selectedCheckoutImage = image;
+          // Reset checkout location when new image is captured
+          _checkoutLatitude = null;
+          _checkoutLongitude = null;
+        });
+
+        // Automatically fetch GPS location after photo is captured
+        await _fetchCheckoutLocation();
+      }
+    } catch (error) {
+      _showMessage('Unable to capture image');
+    }
+  }
+
+  Future<void> _fetchCheckoutLocation() async {
+    setState(() {
+      _isFetchingLocation = true;
+    });
+
+    try {
+      // Request location permission
+      final hasPermission = await _requestLocationPermission();
+      if (!hasPermission) {
+        if (mounted) {
+          setState(() {
+            _isFetchingLocation = false;
+            _checkoutLatitude = null;
+            _checkoutLongitude = null;
+          });
+        }
+        return;
+      }
+
+      // Try to get last known position first (faster)
+      Position? lastKnownPosition;
+      try {
+        lastKnownPosition = await Geolocator.getLastKnownPosition();
+      } catch (e) {
+        // Ignore if last known position is not available
+      }
+
+      Position position;
+      
+      // If last known position is available, use it; otherwise get current position
+      if (lastKnownPosition != null) {
+        position = lastKnownPosition;
+      } else {
+        try {
+          position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.medium,
+            timeLimit: const Duration(seconds: 5),
+          ).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              throw TimeoutException('Location fetch timed out');
+            },
+          );
+        } catch (timeoutError) {
+          final fallbackPosition = await Geolocator.getLastKnownPosition();
+          if (fallbackPosition == null) {
+            throw Exception('Unable to get location. Please ensure GPS is enabled.');
+          }
+          position = fallbackPosition;
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _checkoutLatitude = position.latitude;
+          _checkoutLongitude = position.longitude;
+          _isFetchingLocation = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isFetchingLocation = false;
+          _checkoutLatitude = null;
+          _checkoutLongitude = null;
+        });
+        final errorMessage = e.toString().contains('timeout') || e.toString().contains('Timeout')
+            ? 'Location fetch timed out. Please ensure GPS is enabled and try again.'
+            : 'Unable to fetch location. Please enable GPS.';
+        _showMessage(errorMessage);
+      }
+    }
+  }
+
+  Future<void> _handleCheckOut() async {
+    if (_selectedCheckoutImage == null) {
+      _showMessage('Please capture a photo before checking out');
+      return;
+    }
+
+    if (_checkoutLatitude == null || _checkoutLongitude == null) {
       _showMessage('Unable to fetch location. Please enable GPS.');
       return;
     }
@@ -229,14 +333,16 @@ class _CheckInOutScreenState extends State<CheckInOutScreen> {
 
     try {
       await ApiService().checkOut(
-        latitude: _latitude!,
-        longitude: _longitude!,
+        imageFile: File(_selectedCheckoutImage!.path),
+        latitude: _checkoutLatitude!,
+        longitude: _checkoutLongitude!,
       );
       if (mounted) {
         _showSuccessMessage('Check-out successful');
         setState(() {
-          _latitude = null;
-          _longitude = null;
+          _selectedCheckoutImage = null;
+          _checkoutLatitude = null;
+          _checkoutLongitude = null;
         });
       }
     } catch (error) {
@@ -297,8 +403,11 @@ class _CheckInOutScreenState extends State<CheckInOutScreen> {
             onPressed: () {
               setState(() {
                 _selectedImage = null;
+                _selectedCheckoutImage = null;
                 _latitude = null;
                 _longitude = null;
+                _checkoutLatitude = null;
+                _checkoutLongitude = null;
               });
             },
             tooltip: 'Clear',
@@ -498,6 +607,102 @@ class _CheckInOutScreenState extends State<CheckInOutScreen> {
               isLoading: _isCheckingIn,
               width: double.infinity,
               height: 56,
+            ),
+            const SizedBox(height: 24),
+            // Check Out Image Selection Section
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.image,
+                          color: AppTheme.secondaryColor,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Checkout Photo',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    if (_selectedCheckoutImage != null)
+                      Container(
+                        height: 200,
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          image: DecorationImage(
+                            image: FileImage(File(_selectedCheckoutImage!.path)),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    if (_checkoutLatitude != null && _checkoutLongitude != null)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.secondaryColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.check_circle,
+                                  color: AppTheme.successColor,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Checkout Location Captured',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.successColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Lat: ${_checkoutLatitude!.toStringAsFixed(6)}, Lng: ${_checkoutLongitude!.toStringAsFixed(6)}',
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: AppTheme.textColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    CustomButton(
+                      onPressed: _pickCheckoutImageFromCamera,
+                      text: 'Capture Checkout Photo',
+                      icon: Icons.camera_alt,
+                      isOutlined: true,
+                      backgroundColor: AppTheme.secondaryColor,
+                      width: double.infinity,
+                    ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 16),
             // Check Out Button

@@ -17,8 +17,11 @@ interface AttendanceRecord {
   check_in_time: string;
   check_out_time?: string;
   image_url?: string;
+  checkout_image_url?: string;
   latitude?: number;
   longitude?: number;
+  checkout_latitude?: number;
+  checkout_longitude?: number;
   project_id?: string;
   project_name?: string;
 }
@@ -245,29 +248,75 @@ export default function ClientAttendancePage() {
       key: 'image',
       header: 'Image',
       render: (item: AttendanceRecord) => {
-        if (!item.image_url) {
-          return <span className="text-gray-400 text-sm">-</span>;
+        const hasCheckInImage = !!item.image_url;
+        const hasCheckoutImage = !!item.checkout_image_url;
+        
+        if (!hasCheckInImage && !hasCheckoutImage) {
+          return <span className="text-gray-400 text-xs">-</span>;
         }
+        
         return (
-          <button
-            onClick={() => setSelectedImage(item.image_url || null)}
-            className="flex items-center justify-center w-12 h-12 rounded-lg border border-gray-200 hover:border-primary-300 hover:shadow-sm transition-all overflow-hidden bg-gray-50 group"
-            title="Click to view image"
-          >
-            <img
-              src={item.image_url}
-              alt="Check-in photo"
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-              onError={(e) => {
-                const img = e.target as HTMLImageElement;
-                img.style.display = 'none';
-                const parent = img.parentElement;
-                if (parent) {
-                  parent.innerHTML = '<div class="flex items-center justify-center w-full h-full"><svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg></div>';
-                }
-              }}
-            />
-          </button>
+          <div className="flex items-start gap-3">
+            {/* Check-in Image */}
+            <div className="flex flex-col gap-1">
+              {hasCheckInImage ? (
+                <button
+                  onClick={() => setSelectedImage(item.image_url || null)}
+                  className="flex items-center justify-center w-14 h-14 rounded border border-gray-300 hover:border-primary-400 hover:shadow-sm transition-all overflow-hidden bg-gray-50 group mx-auto"
+                  title="Check-in Image - Click to preview"
+                >
+                  <img
+                    src={item.image_url}
+                    alt="Check-in"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    onError={(e) => {
+                      const img = e.target as HTMLImageElement;
+                      img.style.display = 'none';
+                      const parent = img.parentElement;
+                      if (parent) {
+                        parent.innerHTML = '<div class="flex items-center justify-center w-full h-full"><svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg></div>';
+                      }
+                    }}
+                  />
+                </button>
+              ) : (
+                <div className="flex items-center justify-center w-14 h-14 rounded border border-dashed border-gray-300 bg-gray-50 mx-auto">
+                  <Image className="h-4 w-4 text-gray-300" strokeWidth={1.5} />
+                </div>
+              )}
+              <span className="text-[10px] font-medium text-gray-600 text-center">Check-in Image</span>
+            </div>
+            
+            {/* Check-out Image */}
+            <div className="flex flex-col gap-1">
+              {hasCheckoutImage ? (
+                <button
+                  onClick={() => setSelectedImage(item.checkout_image_url || null)}
+                  className="flex items-center justify-center w-14 h-14 rounded border border-gray-300 hover:border-blue-400 hover:shadow-sm transition-all overflow-hidden bg-gray-50 group mx-auto"
+                  title="Check-out Image - Click to preview"
+                >
+                  <img
+                    src={item.checkout_image_url}
+                    alt="Check-out"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    onError={(e) => {
+                      const img = e.target as HTMLImageElement;
+                      img.style.display = 'none';
+                      const parent = img.parentElement;
+                      if (parent) {
+                        parent.innerHTML = '<div class="flex items-center justify-center w-full h-full"><svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg></div>';
+                      }
+                    }}
+                  />
+                </button>
+              ) : (
+                <div className="flex items-center justify-center w-14 h-14 rounded border border-dashed border-gray-300 bg-gray-50 mx-auto">
+                  <Image className="h-4 w-4 text-gray-300" strokeWidth={1.5} />
+                </div>
+              )}
+              <span className="text-[10px] font-medium text-gray-600 text-center">Check-out Image</span>
+            </div>
+          </div>
         );
       },
     },
@@ -275,30 +324,62 @@ export default function ClientAttendancePage() {
       key: 'location',
       header: 'Location',
       render: (item: AttendanceRecord) => {
-        if (!item.latitude || !item.longitude) {
-          return <span className="text-gray-400 text-sm">-</span>;
+        const hasCheckInLocation = item.latitude != null && item.longitude != null;
+        const hasCheckoutLocation = item.checkout_latitude != null && item.checkout_longitude != null;
+        
+        if (!hasCheckInLocation && !hasCheckoutLocation) {
+          return <span className="text-gray-400 text-xs">-</span>;
         }
+        
         return (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1 text-xs text-gray-700">
-              <MapPin className="h-3 w-3 text-primary-600" />
-              <span className="font-medium">Lat:</span>
-              <span>{item.latitude.toFixed(6)}</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs text-gray-700">
-              <MapPin className="h-3 w-3 text-primary-600" />
-              <span className="font-medium">Lng:</span>
-              <span>{item.longitude.toFixed(6)}</span>
-            </div>
-            <a
-              href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-primary-600 hover:text-primary-700 hover:underline flex items-center gap-1"
-            >
-              <Eye className="h-3 w-3" />
-              View on Map
-            </a>
+          <div className="space-y-2">
+            {/* Check-in Location */}
+            {hasCheckInLocation ? (
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium text-gray-600">Check-in:</span>
+                  <span className="text-xs text-gray-500 font-mono">{item.latitude!.toFixed(6)}, {item.longitude!.toFixed(6)}</span>
+                </div>
+                <a
+                  href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 hover:underline font-medium transition-colors"
+                >
+                  <MapPin className="h-3 w-3" />
+                  <span>View Map</span>
+                </a>
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400">
+                <span>Check-in: N/A</span>
+              </div>
+            )}
+            
+            {/* Check-out Location */}
+            {hasCheckoutLocation ? (
+              <div className="space-y-0.5 pt-1 border-t border-gray-100">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium text-gray-600">Check-out:</span>
+                  <span className="text-xs text-gray-500 font-mono">{item.checkout_latitude!.toFixed(6)}, {item.checkout_longitude!.toFixed(6)}</span>
+                </div>
+                <a
+                  href={`https://www.google.com/maps?q=${item.checkout_latitude},${item.checkout_longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 hover:underline font-medium transition-colors"
+                >
+                  <MapPin className="h-3 w-3" />
+                  <span>View Map</span>
+                </a>
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400 pt-1 border-t border-gray-100">
+                <span>Check-out: N/A</span>
+              </div>
+            )}
           </div>
         );
       },

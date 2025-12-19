@@ -5,8 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import { leaveAPI, employeesAPI, LeaveRequest, LeaveType, LeaveBalance } from '@/lib/api';
 import Card from '@/components/Card';
 import LeaveRequestForm from '@/components/LeaveRequestForm';
+import LeaveApprovalTable from '@/components/LeaveApprovalTable';
 import LeaveBalanceCard from '@/components/LeaveBalanceCard';
-import { Calendar, Plus, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Calendar, Plus, CheckCircle2, XCircle, Clock, Download, FileSpreadsheet } from 'lucide-react';
+import Pagination from '@/components/Pagination';
 
 export default function LeaveManagementPage() {
   const searchParams = useSearchParams();
@@ -21,6 +23,11 @@ export default function LeaveManagementPage() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [currentMonth, setCurrentMonth] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  
+  const ITEMS_PER_PAGE = 10;
 
   // Sync filter status with URL parameter
   useEffect(() => {
@@ -77,9 +84,89 @@ export default function LeaveManagementPage() {
     }
   };
 
+  const handleExportPDF = async () => {
+    try {
+      setIsExportingPDF(true);
+      
+      const params = new URLSearchParams();
+      if (filterStatus !== 'all') params.append('status', filterStatus);
+      if (currentYear) params.append('year', currentYear.toString());
+      if (currentMonth) params.append('month', currentMonth.toString());
+      
+      const response = await fetch(`/api/proxy/export/leave/pdf?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to export PDF' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to export PDF');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const filename = `leave-report-${currentYear}${currentMonth ? `-${currentMonth}` : ''}.pdf`;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      console.error('Export PDF error:', err);
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      setIsExportingExcel(true);
+      
+      const params = new URLSearchParams();
+      if (filterStatus !== 'all') params.append('status', filterStatus);
+      if (currentYear) params.append('year', currentYear.toString());
+      if (currentMonth) params.append('month', currentMonth.toString());
+      
+      const response = await fetch(`/api/proxy/export/leave/excel?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to export Excel' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to export Excel');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const filename = `leave-report-${currentYear}${currentMonth ? `-${currentMonth}` : ''}.xlsx`;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      console.error('Export Excel error:', err);
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
   const pendingCount = leaveRequests.filter(r => r.status === 'pending').length;
   const approvedCount = leaveRequests.filter(r => r.status === 'approved').length;
   const rejectedCount = leaveRequests.filter(r => r.status === 'rejected').length;
+
+  // Paginate leave requests
+  const paginatedRequests = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return leaveRequests.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [leaveRequests, currentPage]);
+
+  const totalPages = Math.ceil(leaveRequests.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE + 1;
+  const endIndex = Math.min(currentPage * ITEMS_PER_PAGE, leaveRequests.length);
 
   if (loading) {
     return (
@@ -146,6 +233,7 @@ export default function LeaveManagementPage() {
                 value={filterStatus}
                 onChange={(e) => {
                   setFilterStatus(e.target.value);
+                  setCurrentPage(1);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               >
@@ -161,6 +249,7 @@ export default function LeaveManagementPage() {
                 value={currentYear}
                 onChange={(e) => {
                   setCurrentYear(parseInt(e.target.value, 10));
+                  setCurrentPage(1);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               >
@@ -176,6 +265,7 @@ export default function LeaveManagementPage() {
                 onChange={(e) => {
                   const monthValue = e.target.value === '' ? null : parseInt(e.target.value, 10);
                   setCurrentMonth(monthValue);
+                  setCurrentPage(1);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               >
@@ -223,6 +313,24 @@ export default function LeaveManagementPage() {
               <span>Request Leave</span>
             </button>
           </div>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <button
+            onClick={handleExportPDF}
+            disabled={isExportingPDF || leaveRequests.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className={`h-4 w-4 ${isExportingPDF ? 'animate-spin' : ''}`} />
+            <span>Export PDF</span>
+          </button>
+          <button
+            onClick={handleExportExcel}
+            disabled={isExportingExcel || leaveRequests.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <FileSpreadsheet className={`h-4 w-4 ${isExportingExcel ? 'animate-spin' : ''}`} />
+            <span>Export Excel</span>
+          </button>
         </div>
       </div>
 
@@ -283,6 +391,26 @@ export default function LeaveManagementPage() {
           </div>
         </div>
       )}
+
+      {/* Leave Requests Table */}
+      <Card title="Leave Requests">
+        {leaveRequests.length > 0 && (
+          <p className="text-sm text-gray-600 mb-4">
+            Showing {startIndex} - {endIndex} of {leaveRequests.length} requests
+          </p>
+        )}
+        <LeaveApprovalTable
+          requests={paginatedRequests}
+          onUpdate={fetchData}
+        />
+        {totalPages > 1 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={setCurrentPage}
+          />
+        )}
+      </Card>
 
       {/* Leave Request Form Modal */}
       {showRequestForm && (

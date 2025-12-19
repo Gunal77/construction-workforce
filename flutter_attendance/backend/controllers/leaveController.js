@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { uploadLeaveDocument } = require('../services/uploadService');
 
 // Get all leave types
 const getLeaveTypes = async (req, res) => {
@@ -50,6 +51,8 @@ const getLeaveRequests = async (req, res) => {
         lt.name AS leave_type_name,
         lt.code AS leave_type_code,
         a.name AS approved_by_name,
+        stand_in.name AS stand_in_employee_name,
+        stand_in.email AS stand_in_employee_email,
         COALESCE(
           lr.project_id,
           (SELECT pe.project_id FROM project_employees pe 
@@ -75,6 +78,7 @@ const getLeaveRequests = async (req, res) => {
       LEFT JOIN admins a ON a.id = lr.approved_by
       LEFT JOIN projects p ON p.id = lr.project_id
       LEFT JOIN projects ep ON ep.id = e.project_id
+      LEFT JOIN employees stand_in ON stand_in.id = lr.stand_in_employee_id
       WHERE 1=1
     `;
     
@@ -125,15 +129,29 @@ const getLeaveRequests = async (req, res) => {
 const createLeaveRequest = async (req, res) => {
   try {
     // Support both camelCase and snake_case for flexibility
-    const employeeId = req.body.employeeId || req.body.employee_id;
+    // Also check req.employeeId from staffMiddleware
+    const employeeId = req.body.employeeId || req.body.employee_id || req.employeeId;
     const leaveTypeId = req.body.leaveTypeId || req.body.leave_type_id;
     const projectId = req.body.projectId || req.body.project_id;
     const startDate = req.body.startDate || req.body.start_date;
     const endDate = req.body.endDate || req.body.end_date;
-    const reason = req.body.reason || req.body.rejection_reason;
+    const reason = req.body.reason;
+    const standInEmployeeId = req.body.standInEmployeeId || req.body.stand_in_employee_id;
+    
+    console.log('Create leave request - received data:', {
+      employeeId,
+      leaveTypeId,
+      startDate,
+      endDate,
+      reason,
+      standInEmployeeId,
+      hasFile: !!req.file
+    });
     
     if (!employeeId || !leaveTypeId || !startDate || !endDate) {
-      return res.status(400).json({ message: 'Missing required fields' });
+      return res.status(400).json({ 
+        message: `Missing required fields. employeeId: ${!!employeeId}, leaveTypeId: ${!!leaveTypeId}, startDate: ${!!startDate}, endDate: ${!!endDate}` 
+      });
     }
     
     // Calculate number of days
@@ -147,7 +165,7 @@ const createLeaveRequest = async (req, res) => {
       return res.status(400).json({ message: 'Invalid date range' });
     }
     
-    // Check if annual leave balance is sufficient
+    // Get leave type code
     const { rows: leaveTypeResult } = await db.query(
       'SELECT code FROM leave_types WHERE id = $1',
       [leaveTypeId]
@@ -159,6 +177,26 @@ const createLeaveRequest = async (req, res) => {
     
     const leaveTypeCode = leaveTypeResult[0].code;
     
+    // Validate MC document upload for Medical Leave
+    let mcDocumentUrl = null;
+    if (leaveTypeCode === 'SICK' || leaveTypeCode === 'MC') {
+      if (!req.file) {
+        return res.status(400).json({ 
+          message: 'Medical certificate document is required for MC leave' 
+        });
+      }
+      
+      try {
+        mcDocumentUrl = await uploadLeaveDocument(req.file, employeeId);
+      } catch (uploadError) {
+        console.error('MC document upload error:', uploadError);
+        return res.status(500).json({ 
+          message: 'Failed to upload medical certificate document' 
+        });
+      }
+    }
+    
+    // Check if annual leave balance is sufficient
     if (leaveTypeCode === 'ANNUAL') {
       const currentYear = new Date(startDate).getFullYear();
       const { rows: balanceResult } = await db.query(
@@ -174,19 +212,48 @@ const createLeaveRequest = async (req, res) => {
       }
     }
     
+    // Validate stand-in employee exists if provided
+    if (standInEmployeeId) {
+      const { rows: standInResult } = await db.query(
+        'SELECT id FROM employees WHERE id = $1',
+        [standInEmployeeId]
+      );
+      
+      if (standInResult.length === 0) {
+        return res.status(400).json({ message: 'Invalid stand-in employee' });
+      }
+    }
+    
     // Create leave request
     const { rows } = await db.query(
       `INSERT INTO leave_requests 
-       (employee_id, leave_type_id, project_id, start_date, end_date, number_of_days, reason, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+       (employee_id, leave_type_id, project_id, start_date, end_date, number_of_days, reason, 
+        mc_document_url, stand_in_employee_id, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
        RETURNING *`,
-      [employeeId, leaveTypeId, projectId || null, startDate, endDate, numberOfDays, reason || null]
+      [
+        employeeId, 
+        leaveTypeId, 
+        projectId || null, 
+        startDate, 
+        endDate, 
+        numberOfDays, 
+        reason || null,
+        mcDocumentUrl,
+        standInEmployeeId || null
+      ]
     );
     
     return res.status(201).json({ request: rows[0] });
   } catch (error) {
     console.error('Create leave request error', error);
-    return res.status(500).json({ message: 'Failed to create leave request' });
+    // Return more detailed error message for debugging
+    const errorMessage = error.message || 'Failed to create leave request';
+    const statusCode = error.code === '23505' ? 409 : 500; // Handle unique constraint violations
+    return res.status(statusCode).json({ 
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 
@@ -196,10 +263,30 @@ const updateLeaveRequestStatus = async (req, res) => {
     const { requestId } = req.params;
     const { status, rejectionReason } = req.body;
     // Admin ID from token (set by adminAuthMiddleware)
-    const adminId = req.admin?.id;
+    const adminId = req.admin?.id || req.user?.id;
     
     if (!['approved', 'rejected', 'cancelled'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
+    }
+    
+    // Get the leave request first to check current status
+    const { rows: existingRequest } = await db.query(
+      'SELECT * FROM leave_requests WHERE id = $1',
+      [requestId]
+    );
+    
+    if (existingRequest.length === 0) {
+      return res.status(404).json({ message: 'Leave request not found' });
+    }
+    
+    const leaveRequest = existingRequest[0];
+    
+    // If already approved/rejected, don't allow status change (unless cancelling)
+    if (leaveRequest.status === 'approved' && status !== 'cancelled') {
+      return res.status(400).json({ message: 'Leave request is already approved' });
+    }
+    if (leaveRequest.status === 'rejected' && status !== 'cancelled') {
+      return res.status(400).json({ message: 'Leave request is already rejected' });
     }
     
     const updateData = {
@@ -211,6 +298,10 @@ const updateLeaveRequestStatus = async (req, res) => {
       updateData.approved_by = adminId;
       updateData.approved_at = new Date().toISOString();
       updateData.rejection_reason = null;
+      
+      // Note: AL balance deduction is handled by database trigger (deduct_annual_leave_on_approval)
+      // Approved leaves are automatically included in monthly summary calculations
+      // No need to create attendance_logs records - monthly summary queries leave_requests directly
     } else if (status === 'rejected') {
       updateData.rejection_reason = rejectionReason || null;
       updateData.approved_by = adminId;
@@ -236,7 +327,14 @@ const updateLeaveRequestStatus = async (req, res) => {
       return res.status(404).json({ message: 'Leave request not found' });
     }
     
-    return res.json({ request: rows[0] });
+    return res.json({ 
+      request: rows[0],
+      message: status === 'approved' 
+        ? 'Leave request approved. Approved leaves are automatically reflected in attendance and monthly summaries.'
+        : status === 'rejected'
+        ? 'Leave request rejected.'
+        : 'Leave request cancelled.'
+    });
   } catch (error) {
     console.error('Update leave request status error', error);
     return res.status(500).json({ message: 'Failed to update leave request status' });

@@ -6,7 +6,7 @@ import Table from '@/components/Table';
 import Modal from '@/components/Modal';
 import Input from '@/components/Input';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Plus, Search, CheckCircle2, XCircle, Calendar, Clock, FileText, CalendarDays, Eye, Download, AlertCircle } from 'lucide-react';
+import { Plus, Search, CheckCircle2, XCircle, Calendar, Clock, FileText, CalendarDays, Eye, Download, AlertCircle, FileSpreadsheet } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 import ViewTimesheetModal from '@/components/ViewTimesheetModal';
 
@@ -37,6 +37,8 @@ export default function TimesheetsPage() {
   const [projectFilter, setProjectFilter] = useState('all');
   const [employeeFilter, setEmployeeFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -557,6 +559,84 @@ export default function TimesheetsPage() {
     },
   ];
 
+  const handleExportPDF = async () => {
+    try {
+      setIsExportingPDF(true);
+      setError('');
+      
+      const params = new URLSearchParams();
+      if (dateRangeStart) params.append('startDate', dateRangeStart);
+      if (dateRangeEnd) params.append('endDate', dateRangeEnd);
+      if (employeeFilter) params.append('staffId', employeeFilter);
+      if (projectFilter && projectFilter !== 'all') params.append('projectId', projectFilter);
+      if (statusFilter !== 'all') params.append('status', statusFilter);
+      if (approvalStatusFilter !== 'all') params.append('approvalStatus', approvalStatusFilter);
+      
+      const response = await fetch(`/api/proxy/export/timesheet/pdf?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to export PDF' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to export PDF');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const dateStr = dateRangeStart && dateRangeEnd ? `${dateRangeStart}_to_${dateRangeEnd}` : new Date().toISOString().split('T')[0];
+      a.download = `timesheet-report-${dateStr}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export PDF');
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      setIsExportingExcel(true);
+      setError('');
+      
+      const params = new URLSearchParams();
+      if (dateRangeStart) params.append('startDate', dateRangeStart);
+      if (dateRangeEnd) params.append('endDate', dateRangeEnd);
+      if (employeeFilter) params.append('staffId', employeeFilter);
+      if (projectFilter && projectFilter !== 'all') params.append('projectId', projectFilter);
+      if (statusFilter !== 'all') params.append('status', statusFilter);
+      if (approvalStatusFilter !== 'all') params.append('approvalStatus', approvalStatusFilter);
+      
+      const response = await fetch(`/api/proxy/export/timesheet/excel?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to export Excel' }));
+        throw new Error(errorData.error || errorData.message || 'Failed to export Excel');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const dateStr = dateRangeStart && dateRangeEnd ? `${dateRangeStart}_to_${dateRangeEnd}` : new Date().toISOString().split('T')[0];
+      a.download = `timesheet-report-${dateStr}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export Excel');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
   const handleExportCSV = () => {
     const headers = ['Employee', 'Email', 'Date', 'Check In', 'Check Out', 'Regular Hours', 'OT Hours', 'Total Hours', 'Project', 'Status', 'Approval Status', 'OT Approval'];
     const rows = filteredTimesheets.map(t => {
@@ -649,12 +729,30 @@ export default function TimesheetsPage() {
         <h1 className="text-2xl font-bold text-gray-900">Timesheets</h1>
         <div className="flex items-center space-x-2">
           <button
+            onClick={handleExportPDF}
+            disabled={isExportingPDF || filteredTimesheets.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+            title="Export to PDF"
+          >
+            <Download className={`h-4 w-4 ${isExportingPDF ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">PDF</span>
+          </button>
+          <button
+            onClick={handleExportExcel}
+            disabled={isExportingExcel || filteredTimesheets.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+            title="Export to Excel"
+          >
+            <FileSpreadsheet className={`h-4 w-4 ${isExportingExcel ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Excel</span>
+          </button>
+          <button
             onClick={handleExportCSV}
             className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap"
             title="Export to CSV"
           >
             <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Export</span>
+            <span className="hidden sm:inline">CSV</span>
           </button>
           <button
             onClick={() => {
