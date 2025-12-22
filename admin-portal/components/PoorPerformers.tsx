@@ -180,14 +180,17 @@ export default function PoorPerformers({ workers, attendanceRecords }: PoorPerfo
     });
   });
 
-  // Sort by priority: GOOD first, then MEDIUM, then HIGH
+  // Sort by priority: GOOD first (0), then MEDIUM (1), then HIGH (2)
+  // Display order: GOOD → MEDIUM → HIGH (hard)
   // Within same priority, sort by attendance (highest first for GOOD, lowest first for others)
   poorPerformers.sort((a, b) => {
+    // Priority order: GOOD = 0 (first), MEDIUM = 1 (second), HIGH = 2 (third/last)
     const priorityOrder: { [key: string]: number } = { 'GOOD': 0, 'MEDIUM': 1, 'HIGH': 2 };
     const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
     
     if (priorityDiff !== 0) {
-      return priorityDiff; // Sort by priority first (GOOD first, then MEDIUM, then HIGH)
+      // Sort by priority first: GOOD (0) comes before MEDIUM (1), MEDIUM (1) comes before HIGH (2)
+      return priorityDiff;
     }
     
     // Within same priority: GOOD = highest attendance first, others = lowest attendance first

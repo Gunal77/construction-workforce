@@ -3,6 +3,95 @@ const { supabase } = require('../config/supabaseClient');
 const emailService = require('../services/emailService');
 
 /**
+ * Filter financial fields from summary based on user role
+ * Admin: full access to all financial fields
+ * Supervisor: hide all payment and tax fields
+ * Staff: no access to invoice or tax data
+ */
+function filterFinancialFields(summary, userRole) {
+  if (!summary) return summary;
+
+  // Admin has full access
+  if (userRole === 'admin') {
+    return summary;
+  }
+
+  // Supervisor: hide all payment and tax fields
+  if (userRole === 'supervisor') {
+    const filtered = { ...summary };
+    delete filtered.subtotal;
+    delete filtered.payment_type;
+    delete filtered.tax_percentage;
+    delete filtered.tax_amount;
+    delete filtered.total_amount;
+    delete filtered.invoice_number;
+    return filtered;
+  }
+
+  // Staff: no access to invoice or tax data
+  if (userRole === 'staff' || !userRole) {
+    const filtered = { ...summary };
+    delete filtered.subtotal;
+    delete filtered.payment_type;
+    delete filtered.tax_percentage;
+    delete filtered.tax_amount;
+    delete filtered.total_amount;
+    delete filtered.invoice_number;
+    return filtered;
+  }
+
+  // Default: hide financial fields for unknown roles
+  const filtered = { ...summary };
+  delete filtered.subtotal;
+  delete filtered.payment_type;
+  delete filtered.tax_percentage;
+  delete filtered.tax_amount;
+  delete filtered.total_amount;
+  delete filtered.invoice_number;
+  return filtered;
+}
+
+/**
+ * Filter financial fields from array of summaries
+ */
+function filterFinancialFieldsFromArray(summaries, userRole) {
+  if (!Array.isArray(summaries)) return summaries;
+  return summaries.map(summary => filterFinancialFields(summary, userRole));
+}
+
+/**
+ * Generate unique invoice number for a given month/year
+ * Format: INV-YYYY-MM-#### (e.g., INV-2024-01-0001)
+ */
+async function generateInvoiceNumber(month, year) {
+  // Get the highest invoice number for this month/year
+  const result = await db.query(
+    `SELECT invoice_number 
+     FROM monthly_summaries 
+     WHERE month = $1 AND year = $2 AND invoice_number IS NOT NULL
+     ORDER BY invoice_number DESC 
+     LIMIT 1`,
+    [month, year]
+  );
+
+  let sequenceNumber = 1;
+  
+  if (result.rows.length > 0) {
+    // Extract sequence number from existing invoice (e.g., INV-2024-01-0001 -> 1)
+    const lastInvoice = result.rows[0].invoice_number;
+    const match = lastInvoice.match(/INV-\d{4}-\d{2}-(\d+)$/);
+    if (match) {
+      sequenceNumber = parseInt(match[1], 10) + 1;
+    }
+  }
+
+  // Format: INV-YYYY-MM-####
+  const monthStr = String(month).padStart(2, '0');
+  const sequenceStr = String(sequenceNumber).padStart(4, '0');
+  return `INV-${year}-${monthStr}-${sequenceStr}`;
+}
+
+/**
  * Safely parse project_breakdown JSON
  * Handles null, empty strings, and already-parsed objects
  */
@@ -28,11 +117,16 @@ function parseProjectBreakdown(projectBreakdown) {
 /**
  * Generate monthly summary for a single employee (helper function)
  * This is extracted for reuse in bulk generation
+ * @param {string} employeeId - Employee ID
+ * @param {number} month - Month (1-12)
+ * @param {number} year - Year
+ * @param {string} adminId - Admin ID creating the summary
+ * @param {number} [taxPercentage] - Optional tax percentage (defaults to 0 or env var)
  */
-async function generateSummaryForEmployee(employeeId, month, year, adminId) {
-  // Get employee email to find user_id
+async function generateSummaryForEmployee(employeeId, month, year, adminId, taxPercentage = null) {
+  // Get employee email and payment info to find user_id
   const employeeResult = await db.query(
-    `SELECT email FROM employees WHERE id = $1`,
+    `SELECT email, payment_type, hourly_rate, daily_rate, monthly_rate, contract_rate FROM employees WHERE id = $1`,
     [employeeId]
   );
 
@@ -40,10 +134,17 @@ async function generateSummaryForEmployee(employeeId, month, year, adminId) {
     throw new Error('Employee not found');
   }
 
-  const employeeEmail = employeeResult.rows[0].email;
+  const employee = employeeResult.rows[0];
+  const employeeEmail = employee.email;
   if (!employeeEmail) {
     throw new Error('Employee email not found');
   }
+  
+  const paymentType = employee.payment_type;
+  const hourlyRate = employee.hourly_rate ? parseFloat(employee.hourly_rate) : null;
+  const dailyRate = employee.daily_rate ? parseFloat(employee.daily_rate) : null;
+  const monthlyRate = employee.monthly_rate ? parseFloat(employee.monthly_rate) : null;
+  const contractRate = employee.contract_rate ? parseFloat(employee.contract_rate) : null;
 
   // Get user_id from users table
   const userResult = await db.query(
@@ -144,14 +245,63 @@ async function generateSummaryForEmployee(employeeId, month, year, adminId) {
     ot_hours: parseFloat(row.ot_hours || 0),
   }));
 
+  // Calculate subtotal based on payment type
+  let subtotal = 0;
+  if (paymentType === 'hourly' && hourlyRate !== null) {
+    // For hourly: (total_worked_hours * hourly_rate) + (ot_hours * hourly_rate * 1.5)
+    subtotal = (totalWorkedHours * hourlyRate) + (totalOtHours * hourlyRate * 1.5);
+  } else if (paymentType === 'daily' && dailyRate !== null) {
+    // For daily: total_working_days * daily_rate
+    subtotal = totalWorkingDays * dailyRate;
+  } else if (paymentType === 'monthly' && monthlyRate !== null) {
+    // For monthly: monthly_rate (pro-rated if needed, but typically full month)
+    // Calculate working days in month for pro-rating
+    const daysInMonth = endDate.getDate();
+    let weekendDays = 0;
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(year, month - 1, day);
+      const dayOfWeek = date.getDay();
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        weekendDays++;
+      }
+    }
+    const workingDaysInMonth = daysInMonth - weekendDays;
+    // Pro-rate based on actual working days vs expected working days
+    const proratedRate = workingDaysInMonth > 0 ? (totalWorkingDays / workingDaysInMonth) * monthlyRate : 0;
+    subtotal = proratedRate;
+  } else if (paymentType === 'contract' && contractRate !== null) {
+    // For contract: contract_rate (fixed amount)
+    subtotal = contractRate;
+  }
+  // If payment_type is null or rate is null, subtotal remains 0 (backward compatible)
+
+  // Calculate tax (use decimals, no rounding until final total)
+  // Use provided taxPercentage or default from env var or 0
+  const finalTaxPercentage = taxPercentage !== null && taxPercentage !== undefined 
+    ? parseFloat(taxPercentage) 
+    : parseFloat(process.env.DEFAULT_TAX_PERCENTAGE || '0');
+  
+  // Calculate tax amount using decimal precision (no rounding)
+  const taxAmount = subtotal > 0 ? (subtotal * finalTaxPercentage / 100) : 0;
+  
+  // Calculate total amount - round only at the end
+  const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+
+  // Generate invoice number only if subtotal > 0
+  let invoiceNumber = null;
+  if (subtotal > 0) {
+    invoiceNumber = await generateInvoiceNumber(month, year);
+  }
+
   // Insert or update monthly summary
   const summaryResult = await db.query(
     `INSERT INTO monthly_summaries (
       employee_id, month, year,
       total_working_days, total_worked_hours, total_ot_hours,
       approved_leaves, absent_days, project_breakdown,
+      subtotal, tax_percentage, tax_amount, total_amount, invoice_number,
       status, created_by
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'DRAFT', $10)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'DRAFT', $15)
     ON CONFLICT (employee_id, month, year) 
     DO UPDATE SET
       total_working_days = EXCLUDED.total_working_days,
@@ -160,6 +310,15 @@ async function generateSummaryForEmployee(employeeId, month, year, adminId) {
       approved_leaves = EXCLUDED.approved_leaves,
       absent_days = EXCLUDED.absent_days,
       project_breakdown = EXCLUDED.project_breakdown,
+      subtotal = EXCLUDED.subtotal,
+      tax_percentage = EXCLUDED.tax_percentage,
+      tax_amount = EXCLUDED.tax_amount,
+      total_amount = EXCLUDED.total_amount,
+      invoice_number = CASE 
+        WHEN EXCLUDED.invoice_number IS NOT NULL THEN EXCLUDED.invoice_number
+        WHEN monthly_summaries.invoice_number IS NULL AND EXCLUDED.subtotal > 0 THEN EXCLUDED.invoice_number
+        ELSE monthly_summaries.invoice_number
+      END,
       status = CASE 
         WHEN monthly_summaries.status = 'APPROVED' THEN 'APPROVED'
         ELSE 'DRAFT'
@@ -170,6 +329,7 @@ async function generateSummaryForEmployee(employeeId, month, year, adminId) {
       employeeId, month, year,
       totalWorkingDays, totalWorkedHours, totalOtHours,
       approvedLeaves, absentDays, JSON.stringify(projectBreakdown),
+      subtotal, finalTaxPercentage, taxAmount, totalAmount, invoiceNumber,
       adminId
     ]
   );
@@ -186,7 +346,7 @@ async function generateSummaryForEmployee(employeeId, month, year, adminId) {
  */
 const generateMonthlySummary = async (req, res) => {
   try {
-    const { employeeId, month, year } = req.body;
+    const { employeeId, month, year, tax_percentage } = req.body;
     const adminId = req.user?.id; // Admin creating the summary
 
     if (!employeeId || !month || !year) {
@@ -201,6 +361,14 @@ const generateMonthlySummary = async (req, res) => {
     }
     if (year < 2020 || year > 2100) {
       return res.status(400).json({ message: 'Invalid year' });
+    }
+
+    // Validate tax_percentage if provided
+    if (tax_percentage !== undefined && tax_percentage !== null) {
+      const taxPercent = parseFloat(tax_percentage);
+      if (isNaN(taxPercent) || taxPercent < 0 || taxPercent > 100) {
+        return res.status(400).json({ message: 'Invalid tax_percentage. Must be between 0 and 100' });
+      }
     }
 
     // Check if summary already exists
@@ -221,7 +389,7 @@ const generateMonthlySummary = async (req, res) => {
     }
 
     // Generate summary using helper function
-    const summary = await generateSummaryForEmployee(employeeId, month, year, adminId);
+    const summary = await generateSummaryForEmployee(employeeId, month, year, adminId, tax_percentage);
 
     return res.status(201).json({
       message: 'Monthly summary generated successfully',
@@ -241,7 +409,7 @@ const generateMonthlySummary = async (req, res) => {
  */
 const generateMonthlySummariesForAllStaff = async (req, res) => {
   try {
-    const { month, year } = req.body;
+    const { month, year, tax_percentage } = req.body;
     const adminId = req.user?.id; // Admin creating the summaries
 
     if (!month || !year) {
@@ -256,6 +424,14 @@ const generateMonthlySummariesForAllStaff = async (req, res) => {
     }
     if (year < 2020 || year > 2100) {
       return res.status(400).json({ message: 'Invalid year' });
+    }
+
+    // Validate tax_percentage if provided
+    if (tax_percentage !== undefined && tax_percentage !== null) {
+      const taxPercent = parseFloat(tax_percentage);
+      if (isNaN(taxPercent) || taxPercent < 0 || taxPercent > 100) {
+        return res.status(400).json({ message: 'Invalid tax_percentage. Must be between 0 and 100' });
+      }
     }
 
     // Get all employees
@@ -295,7 +471,7 @@ const generateMonthlySummariesForAllStaff = async (req, res) => {
         }
 
         // Generate summary
-        const summary = await generateSummaryForEmployee(employee.id, month, year, adminId);
+        const summary = await generateSummaryForEmployee(employee.id, month, year, adminId, tax_percentage);
         
         results.success.push({
           employee_id: employee.id,
@@ -333,12 +509,19 @@ const generateMonthlySummariesForAllStaff = async (req, res) => {
 const getMonthlySummaries = async (req, res) => {
   try {
     const { employeeId, month, year, status } = req.query;
+    // Get user role from req.user (set by auth middleware)
+    const userRole = req.user?.role || req.admin?.role || 'admin';
 
     let query = `
       SELECT 
         ms.*,
         e.name as employee_name,
         e.email as employee_email,
+        e.payment_type,
+        ms.tax_percentage,
+        ms.tax_amount,
+        ms.total_amount,
+        ms.invoice_number,
         u.id as user_id,
         a.name as admin_name,
         a.email as admin_email
@@ -385,7 +568,10 @@ const getMonthlySummaries = async (req, res) => {
       project_breakdown: parseProjectBreakdown(row.project_breakdown),
     }));
 
-    return res.json({ summaries });
+    // Filter financial fields based on user role
+    const filteredSummaries = filterFinancialFieldsFromArray(summaries, userRole);
+
+    return res.json({ summaries: filteredSummaries });
   } catch (error) {
     console.error('Error fetching monthly summaries:', error);
     return res.status(500).json({ 
@@ -401,6 +587,8 @@ const getMonthlySummaries = async (req, res) => {
 const getMonthlySummaryById = async (req, res) => {
   try {
     const { id } = req.params;
+    // Get user role from req.user (set by auth middleware)
+    const userRole = req.user?.role || req.admin?.role || 'admin';
 
     const result = await db.query(
       `SELECT 
@@ -408,6 +596,7 @@ const getMonthlySummaryById = async (req, res) => {
         e.name as employee_name,
         e.email as employee_email,
         e.role as employee_role,
+        e.payment_type,
         u.id as user_id,
         a.name as admin_name,
         a.email as admin_email,
@@ -428,7 +617,10 @@ const getMonthlySummaryById = async (req, res) => {
     const summary = result.rows[0];
     summary.project_breakdown = parseProjectBreakdown(summary.project_breakdown);
 
-    return res.json({ summary });
+    // Filter financial fields based on user role
+    const filteredSummary = filterFinancialFields(summary, userRole);
+
+    return res.json({ summary: filteredSummary });
   } catch (error) {
     console.error('Error fetching monthly summary:', error);
     return res.status(500).json({ 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { ArrowLeft, Calendar, Clock, FileText, CheckCircle2, XCircle, User, Building2, Download, FileSpreadsheet } from 'lucide-react';
+import { ArrowLeft, Calendar, Clock, FileText, CheckCircle2, XCircle, User, Building2, Download, FileSpreadsheet, DollarSign } from 'lucide-react';
 import SignaturePad from '@/components/SignaturePad';
 import Input from '@/components/Input';
 
@@ -19,6 +19,12 @@ interface MonthlySummary {
   total_ot_hours: number;
   approved_leaves: number;
   absent_days: number;
+  subtotal?: number;
+  payment_type?: 'hourly' | 'daily' | 'monthly' | 'contract' | null;
+  tax_percentage?: number;
+  tax_amount?: number;
+  total_amount?: number;
+  invoice_number?: string;
   status: 'DRAFT' | 'SIGNED_BY_STAFF' | 'APPROVED' | 'REJECTED';
   staff_signature?: string;
   staff_signed_at?: string;
@@ -319,7 +325,7 @@ export default function MonthlySummaryDetailPage() {
         </div>
 
         {/* Summary Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
           <div className="bg-gray-50 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
               <Calendar className="h-5 w-5 text-gray-400" />
@@ -355,7 +361,70 @@ export default function MonthlySummaryDetailPage() {
             </div>
             <p className="text-2xl font-bold text-gray-900">{summary.absent_days}</p>
           </div>
+          {summary.subtotal !== undefined && summary.subtotal !== null && summary.subtotal > 0 && (
+            <div className="bg-primary-50 rounded-lg p-4 border-2 border-primary-200">
+              <div className="flex items-center gap-2 mb-2">
+                <DollarSign className="h-5 w-5 text-primary-600" />
+                <span className="text-sm text-gray-600">Subtotal</span>
+                {summary.payment_type && (
+                  <span className="text-xs text-gray-500">({summary.payment_type})</span>
+                )}
+              </div>
+              <p className="text-2xl font-bold text-primary-700">
+                ${(Number(summary.subtotal) || 0).toFixed(2)}
+              </p>
+            </div>
+          )}
         </div>
+
+        {/* Tax Invoice Breakdown (Admin Only) */}
+        {summary.subtotal !== undefined && summary.subtotal !== null && summary.subtotal > 0 && (
+          <div className="mb-6 bg-white rounded-lg border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-gray-600" />
+              Invoice Details
+              {summary.invoice_number && (
+                <span className="text-sm font-normal text-gray-500 ml-2">
+                  ({summary.invoice_number})
+                </span>
+              )}
+            </h3>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                <span className="text-sm text-gray-600">Subtotal:</span>
+                <span className="text-sm font-medium text-gray-900">
+                  ${(Number(summary.subtotal) || 0).toFixed(2)}
+                </span>
+              </div>
+              {summary.tax_percentage !== undefined && summary.tax_percentage !== null && summary.tax_percentage > 0 && (
+                <>
+                  <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                    <span className="text-sm text-gray-600">
+                      Tax ({Number(summary.tax_percentage) || 0}%):
+                    </span>
+                    <span className="text-sm font-medium text-gray-900">
+                      ${(Number(summary.tax_amount) || 0).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 pt-3 border-t-2 border-gray-300">
+                    <span className="text-base font-semibold text-gray-900">Total Amount:</span>
+                    <span className="text-lg font-bold text-primary-700">
+                      ${(Number(summary.total_amount) || 0).toFixed(2)}
+                    </span>
+                  </div>
+                </>
+              )}
+              {(!summary.tax_percentage || summary.tax_percentage === 0) && (
+                <div className="flex justify-between items-center py-2 pt-3 border-t-2 border-gray-300">
+                  <span className="text-base font-semibold text-gray-900">Total Amount:</span>
+                  <span className="text-lg font-bold text-primary-700">
+                    ${(Number(summary.subtotal) || 0).toFixed(2)}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Project Breakdown */}
         {summary.project_breakdown && summary.project_breakdown.length > 0 && (

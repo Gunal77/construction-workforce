@@ -30,6 +30,11 @@ export default function WorkersPage() {
     email: '',
     phone: '',
     role: '',
+    payment_type: '' as '' | 'hourly' | 'daily' | 'monthly' | 'contract',
+    hourly_rate: '',
+    daily_rate: '',
+    monthly_rate: '',
+    contract_rate: '',
   });
 
   useEffect(() => {
@@ -53,9 +58,31 @@ export default function WorkersPage() {
     setError('');
 
     try {
-      await employeesAPI.create(formData);
+      // Prepare data with payment type and rates
+      const submitData: any = {
+        name: formData.name,
+        email: formData.email || undefined,
+        phone: formData.phone || undefined,
+        role: formData.role || undefined,
+      };
+
+      // Add payment type and corresponding rate
+      if (formData.payment_type) {
+        submitData.payment_type = formData.payment_type;
+        if (formData.payment_type === 'hourly' && formData.hourly_rate) {
+          submitData.hourly_rate = parseFloat(formData.hourly_rate);
+        } else if (formData.payment_type === 'daily' && formData.daily_rate) {
+          submitData.daily_rate = parseFloat(formData.daily_rate);
+        } else if (formData.payment_type === 'monthly' && formData.monthly_rate) {
+          submitData.monthly_rate = parseFloat(formData.monthly_rate);
+        } else if (formData.payment_type === 'contract' && formData.contract_rate) {
+          submitData.contract_rate = parseFloat(formData.contract_rate);
+        }
+      }
+
+      await employeesAPI.create(submitData);
       setIsAddModalOpen(false);
-      setFormData({ name: '', email: '', phone: '', role: '' });
+      setFormData({ name: '', email: '', phone: '', role: '', payment_type: '', hourly_rate: '', daily_rate: '', monthly_rate: '', contract_rate: '' });
       fetchWorkers();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to create staff');
@@ -258,7 +285,7 @@ export default function WorkersPage() {
         isOpen={isAddModalOpen}
         onClose={() => {
           setIsAddModalOpen(false);
-          setFormData({ name: '', email: '', phone: '', role: '' });
+          setFormData({ name: '', email: '', phone: '', role: '', payment_type: '', hourly_rate: '', daily_rate: '', monthly_rate: '', contract_rate: '' });
           setError('');
         }}
         title="Add Staff"
@@ -333,12 +360,113 @@ export default function WorkersPage() {
             </select>
           </div>
 
+          {/* Payment Type Section */}
+          <div className="border-t pt-4 mt-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Payment Information (Admin Only)</h3>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Payment Type
+              </label>
+              <select
+                value={formData.payment_type}
+                onChange={(e) => {
+                  const paymentType = e.target.value as '' | 'hourly' | 'daily' | 'monthly' | 'contract';
+                  setFormData({ 
+                    ...formData, 
+                    payment_type: paymentType,
+                    hourly_rate: '',
+                    daily_rate: '',
+                    monthly_rate: '',
+                    contract_rate: '',
+                  });
+                }}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+              >
+                <option value="">Select Payment Type</option>
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="monthly">Monthly</option>
+                <option value="contract">Contract</option>
+              </select>
+            </div>
+
+            {/* Conditional Rate Fields */}
+            {formData.payment_type === 'hourly' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Hourly Rate *
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.hourly_rate}
+                  onChange={(e) => setFormData({ ...formData, hourly_rate: e.target.value })}
+                  placeholder="Enter hourly rate"
+                  required
+                />
+              </div>
+            )}
+
+            {formData.payment_type === 'daily' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Daily Rate *
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.daily_rate}
+                  onChange={(e) => setFormData({ ...formData, daily_rate: e.target.value })}
+                  placeholder="Enter daily rate"
+                  required
+                />
+              </div>
+            )}
+
+            {formData.payment_type === 'monthly' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Monthly Rate *
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.monthly_rate}
+                  onChange={(e) => setFormData({ ...formData, monthly_rate: e.target.value })}
+                  placeholder="Enter monthly rate"
+                  required
+                />
+              </div>
+            )}
+
+            {formData.payment_type === 'contract' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Contract Rate *
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.contract_rate}
+                  onChange={(e) => setFormData({ ...formData, contract_rate: e.target.value })}
+                  placeholder="Enter contract rate"
+                  required
+                />
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end space-x-3 pt-4">
             <button
               type="button"
               onClick={() => {
                 setIsAddModalOpen(false);
-                setFormData({ name: '', email: '', phone: '', role: '' });
+                setFormData({ name: '', email: '', phone: '', role: '', payment_type: '', hourly_rate: '', daily_rate: '', monthly_rate: '', contract_rate: '' });
                 setError('');
               }}
               className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"

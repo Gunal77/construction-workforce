@@ -80,6 +80,11 @@ export const employeesAPI = {
     phone?: string;
     role?: string;
     project_id?: string;
+    payment_type?: 'hourly' | 'daily' | 'monthly' | 'contract' | null;
+    hourly_rate?: number | null;
+    daily_rate?: number | null;
+    monthly_rate?: number | null;
+    contract_rate?: number | null;
   }) => {
     const response = await fetch('/api/proxy/employees', {
       method: 'POST',
@@ -97,6 +102,11 @@ export const employeesAPI = {
     phone?: string;
     role?: string;
     project_id?: string;
+    payment_type?: 'hourly' | 'daily' | 'monthly' | 'contract' | null;
+    hourly_rate?: number | null;
+    daily_rate?: number | null;
+    monthly_rate?: number | null;
+    contract_rate?: number | null;
   }) => {
     const response = await fetch(`/api/proxy/employees/${id}`, {
       method: 'PUT',
@@ -379,6 +389,11 @@ export interface Employee {
   phone?: string;
   role?: string;
   project_id?: string;
+  payment_type?: 'hourly' | 'daily' | 'monthly' | 'contract' | null;
+  hourly_rate?: number | null;
+  daily_rate?: number | null;
+  monthly_rate?: number | null;
+  contract_rate?: number | null;
   created_at: string;
   projects?: {
     id: string;

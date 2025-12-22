@@ -44,6 +44,8 @@ export default function Table<T>({
                   className={`px-3 sm:px-4 py-2.5 text-xs font-semibold text-gray-700 uppercase tracking-wider ${
                     column.key === 'image' ? 'min-w-[120px] text-center' :
                     column.key === 'location' ? 'min-w-[140px]' :
+                    column.key === 'project' ? 'min-w-[200px] max-w-[300px]' :
+                    column.key === 'employee' ? 'min-w-[180px]' :
                     column.key === 'checkbox' ? 'w-12 text-center' :
                     'text-left'
                   }`}
@@ -65,7 +67,7 @@ export default function Table<T>({
                   key={column.key} 
                   className={`px-3 sm:px-4 py-2.5 text-sm text-gray-900 align-middle ${
                     column.key === 'checkbox' ? 'text-center' :
-                    column.key === 'image' || column.key === 'location' 
+                    column.key === 'image' || column.key === 'location' || column.key === 'project' || column.key === 'employee'
                       ? 'break-words' 
                       : 'whitespace-nowrap'
                   }`}

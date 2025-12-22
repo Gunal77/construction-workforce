@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Calendar, Clock, FileText, CheckCircle2, XCircle, AlertCircle, Search, Download, FileSpreadsheet, CheckSquare } from 'lucide-react';
 import Table from '@/components/Table';
 import Modal from '@/components/Modal';
 import SignaturePad from '@/components/SignaturePad';
 import SearchableSelect from '@/components/SearchableSelect';
+import Pagination from '@/components/Pagination';
 import { employeesAPI } from '@/lib/api';
 
 interface MonthlySummary {
@@ -57,10 +58,14 @@ export default function MonthlySummariesPage() {
   const [isBulkApproving, setIsBulkApproving] = useState(false);
   const [bulkApproveSignature, setBulkApproveSignature] = useState('');
   const [bulkApproveRemarks, setBulkApproveRemarks] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  
+  const ITEMS_PER_PAGE = 10;
 
   useEffect(() => {
     fetchSummaries();
     fetchEmployees();
+    setCurrentPage(1); // Reset to first page when filters change
   }, [statusFilter, monthFilter, yearFilter, employeeFilter]);
 
   const fetchEmployees = async () => {
@@ -203,16 +208,28 @@ export default function MonthlySummariesPage() {
     }
   };
 
-  const filteredSummaries = summaries.filter((summary) => {
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return (
-        summary.employee_name?.toLowerCase().includes(query) ||
-        summary.employee_email?.toLowerCase().includes(query)
-      );
-    }
-    return true;
-  });
+  const filteredSummaries = useMemo(() => {
+    return summaries.filter((summary) => {
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        return (
+          summary.employee_name?.toLowerCase().includes(query) ||
+          summary.employee_email?.toLowerCase().includes(query)
+        );
+      }
+      return true;
+    });
+  }, [summaries, searchQuery]);
+
+  // Paginate filtered summaries
+  const paginatedSummaries = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredSummaries.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredSummaries, currentPage]);
+
+  const totalPages = Math.ceil(filteredSummaries.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE + 1;
+  const endIndex = Math.min(currentPage * ITEMS_PER_PAGE, filteredSummaries.length);
 
   const handleExportPDF = async () => {
     const approvedSummaries = filteredSummaries.filter(s => s.status === 'APPROVED');
@@ -340,27 +357,26 @@ export default function MonthlySummariesPage() {
     }
   };
 
-  // Handle select all
+  // Handle select all (selects from all pages)
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      // Only select SIGNED_BY_STAFF summaries
-      const signableIds = filteredSummaries
+      // Select all SIGNED_BY_STAFF summaries from all pages
+      const allSignableIds = filteredSummaries
         .filter(s => s.status === 'SIGNED_BY_STAFF')
         .map(s => s.id);
-      setSelectedSummaryIds(signableIds);
+      setSelectedSummaryIds(allSignableIds);
     } else {
+      // Deselect all
       setSelectedSummaryIds([]);
     }
   };
 
-  // Check if all SIGNED_BY_STAFF summaries are selected
-  const allSignedSelected = filteredSummaries
-    .filter(s => s.status === 'SIGNED_BY_STAFF')
-    .every(s => selectedSummaryIds.includes(s.id));
+  // Check if all SIGNED_BY_STAFF summaries across all pages are selected
+  const allSignableSummaries = filteredSummaries.filter(s => s.status === 'SIGNED_BY_STAFF');
+  const allSignedSelected = allSignableSummaries.length > 0 && 
+    allSignableSummaries.every(s => selectedSummaryIds.includes(s.id));
   
-  const someSignedSelected = filteredSummaries
-    .filter(s => s.status === 'SIGNED_BY_STAFF')
-    .some(s => selectedSummaryIds.includes(s.id));
+  const someSignedSelected = allSignableSummaries.some(s => selectedSummaryIds.includes(s.id));
 
   // Handle bulk approve
   const handleBulkApprove = async () => {
@@ -406,29 +422,18 @@ export default function MonthlySummariesPage() {
   const columns = [
     {
       key: 'checkbox',
-      header: (
-        <div className="flex items-center justify-center h-full">
-          <input
-            type="checkbox"
-            checked={allSignedSelected && filteredSummaries.filter(s => s.status === 'SIGNED_BY_STAFF').length > 0}
-            ref={(input) => {
-              if (input) input.indeterminate = someSignedSelected && !allSignedSelected;
-            }}
-            onChange={(e) => handleSelectAll(e.target.checked)}
-            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
-          />
-        </div>
-      ),
+      header: 'Select',
       renderHeader: () => (
         <div className="flex items-center justify-center h-full">
           <input
             type="checkbox"
-            checked={allSignedSelected && filteredSummaries.filter(s => s.status === 'SIGNED_BY_STAFF').length > 0}
+            checked={allSignedSelected && allSignableSummaries.length > 0}
             ref={(input) => {
               if (input) input.indeterminate = someSignedSelected && !allSignedSelected;
             }}
             onChange={(e) => handleSelectAll(e.target.checked)}
             className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
+            title={allSignedSelected ? "Deselect all" : "Select all signable summaries"}
           />
         </div>
       ),
@@ -589,6 +594,7 @@ export default function MonthlySummariesPage() {
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
+                  setCurrentPage(1); // Reset to first page when search changes
                 }}
                 placeholder="Search by staff name or email..."
                 className="w-full pl-12 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
@@ -665,12 +671,31 @@ export default function MonthlySummariesPage() {
           </p>
         </div>
       ) : (
-        <Table
-          columns={columns}
-          data={filteredSummaries}
-          keyExtractor={(item) => item.id}
-          emptyMessage="No monthly summaries found"
-        />
+        <>
+          <Table
+            columns={columns}
+            data={paginatedSummaries}
+            keyExtractor={(item) => item.id}
+            emptyMessage="No monthly summaries found"
+          />
+          {totalPages > 1 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <div className="flex flex-col items-center space-y-3">
+                <div className="text-sm text-gray-600">
+                  Showing {startIndex} to {endIndex} of {filteredSummaries.length} summaries
+                </div>
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={(page) => {
+                    setCurrentPage(page);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Approve Modal */}

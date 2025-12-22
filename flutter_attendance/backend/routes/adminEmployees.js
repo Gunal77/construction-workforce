@@ -36,7 +36,7 @@ router.get('/', async (req, res) => {
 // POST /admin/employees - Add new employee
 router.post('/', async (req, res) => {
   try {
-    const { name, email, phone, role, project_id } = req.body;
+    const { name, email, phone, role, project_id, payment_type, hourly_rate, daily_rate, monthly_rate, contract_rate } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ message: 'Employee name is required' });
@@ -45,6 +45,25 @@ router.post('/', async (req, res) => {
     // Validate email format if provided
     if (email && (!email.includes('@') || email.trim().length === 0)) {
       return res.status(400).json({ message: 'Invalid email format' });
+    }
+
+    // Validate payment_type if provided
+    if (payment_type && !['hourly', 'daily', 'monthly', 'contract'].includes(payment_type)) {
+      return res.status(400).json({ message: 'Invalid payment_type. Must be hourly, daily, monthly, or contract' });
+    }
+
+    // Validate rate based on payment_type
+    if (payment_type === 'hourly' && (!hourly_rate || hourly_rate < 0)) {
+      return res.status(400).json({ message: 'hourly_rate is required and must be >= 0 for hourly payment type' });
+    }
+    if (payment_type === 'daily' && (!daily_rate || daily_rate < 0)) {
+      return res.status(400).json({ message: 'daily_rate is required and must be >= 0 for daily payment type' });
+    }
+    if (payment_type === 'monthly' && (!monthly_rate || monthly_rate < 0)) {
+      return res.status(400).json({ message: 'monthly_rate is required and must be >= 0 for monthly payment type' });
+    }
+    if (payment_type === 'contract' && (!contract_rate || contract_rate < 0)) {
+      return res.status(400).json({ message: 'contract_rate is required and must be >= 0 for contract payment type' });
     }
 
     // If project_id is provided, verify it exists
@@ -66,6 +85,11 @@ router.post('/', async (req, res) => {
       phone: phone?.trim() || null,
       role: role?.trim() || null,
       project_id: project_id || null,
+      payment_type: payment_type || null,
+      hourly_rate: payment_type === 'hourly' ? parseFloat(hourly_rate) : null,
+      daily_rate: payment_type === 'daily' ? parseFloat(daily_rate) : null,
+      monthly_rate: payment_type === 'monthly' ? parseFloat(monthly_rate) : null,
+      contract_rate: payment_type === 'contract' ? parseFloat(contract_rate) : null,
     };
 
     const { data, error } = await supabase
@@ -99,7 +123,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, phone, role, project_id } = req.body;
+    const { name, email, phone, role, project_id, payment_type, hourly_rate, daily_rate, monthly_rate, contract_rate } = req.body;
 
     if (!id) {
       return res.status(400).json({ message: 'Employee ID is required' });
@@ -138,6 +162,69 @@ router.put('/:id', async (req, res) => {
         }
       }
       updateData.project_id = project_id || null;
+    }
+    
+    // Handle payment_type and rates
+    if (payment_type !== undefined) {
+      if (payment_type && !['hourly', 'daily', 'monthly', 'contract'].includes(payment_type)) {
+        return res.status(400).json({ message: 'Invalid payment_type. Must be hourly, daily, monthly, or contract' });
+      }
+      updateData.payment_type = payment_type || null;
+      
+      // Clear rates that don't match the payment type
+      if (payment_type === 'hourly') {
+        updateData.hourly_rate = hourly_rate !== undefined ? parseFloat(hourly_rate) : null;
+        updateData.daily_rate = null;
+        updateData.monthly_rate = null;
+        updateData.contract_rate = null;
+        if (hourly_rate !== undefined && (!hourly_rate || hourly_rate < 0)) {
+          return res.status(400).json({ message: 'hourly_rate must be >= 0 for hourly payment type' });
+        }
+      } else if (payment_type === 'daily') {
+        updateData.daily_rate = daily_rate !== undefined ? parseFloat(daily_rate) : null;
+        updateData.hourly_rate = null;
+        updateData.monthly_rate = null;
+        updateData.contract_rate = null;
+        if (daily_rate !== undefined && (!daily_rate || daily_rate < 0)) {
+          return res.status(400).json({ message: 'daily_rate must be >= 0 for daily payment type' });
+        }
+      } else if (payment_type === 'monthly') {
+        updateData.monthly_rate = monthly_rate !== undefined ? parseFloat(monthly_rate) : null;
+        updateData.hourly_rate = null;
+        updateData.daily_rate = null;
+        updateData.contract_rate = null;
+        if (monthly_rate !== undefined && (!monthly_rate || monthly_rate < 0)) {
+          return res.status(400).json({ message: 'monthly_rate must be >= 0 for monthly payment type' });
+        }
+      } else if (payment_type === 'contract') {
+        updateData.contract_rate = contract_rate !== undefined ? parseFloat(contract_rate) : null;
+        updateData.hourly_rate = null;
+        updateData.daily_rate = null;
+        updateData.monthly_rate = null;
+        if (contract_rate !== undefined && (!contract_rate || contract_rate < 0)) {
+          return res.status(400).json({ message: 'contract_rate must be >= 0 for contract payment type' });
+        }
+      } else {
+        // payment_type is null/empty, clear all rates
+        updateData.hourly_rate = null;
+        updateData.daily_rate = null;
+        updateData.monthly_rate = null;
+        updateData.contract_rate = null;
+      }
+    } else {
+      // If payment_type is not being updated, allow individual rate updates
+      if (hourly_rate !== undefined) {
+        updateData.hourly_rate = hourly_rate ? parseFloat(hourly_rate) : null;
+      }
+      if (daily_rate !== undefined) {
+        updateData.daily_rate = daily_rate ? parseFloat(daily_rate) : null;
+      }
+      if (monthly_rate !== undefined) {
+        updateData.monthly_rate = monthly_rate ? parseFloat(monthly_rate) : null;
+      }
+      if (contract_rate !== undefined) {
+        updateData.contract_rate = contract_rate ? parseFloat(contract_rate) : null;
+      }
     }
 
     if (Object.keys(updateData).length === 0) {

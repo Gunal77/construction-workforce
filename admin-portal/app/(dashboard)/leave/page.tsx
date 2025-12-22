@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { leaveAPI, employeesAPI, LeaveRequest, LeaveType, LeaveBalance } from '@/lib/api';
 import Card from '@/components/Card';
 import LeaveRequestForm from '@/components/LeaveRequestForm';
-import LeaveApprovalTable from '@/components/LeaveApprovalTable';
+import Table from '@/components/Table';
 import LeaveBalanceCard from '@/components/LeaveBalanceCard';
 import { Calendar, Plus, CheckCircle2, XCircle, Clock, Download, FileSpreadsheet, CheckSquare } from 'lucide-react';
 import Modal from '@/components/Modal';
@@ -31,6 +31,16 @@ export default function LeaveManagementPage() {
   const [showBulkApproveModal, setShowBulkApproveModal] = useState(false);
   const [isBulkApproving, setIsBulkApproving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [approvalModal, setApprovalModal] = useState<{ open: boolean; requestId: string | null; request?: LeaveRequest }>({
+    open: false,
+    requestId: null,
+  });
+  const [rejectionModal, setRejectionModal] = useState<{ open: boolean; requestId: string | null; request?: LeaveRequest }>({
+    open: false,
+    requestId: null,
+  });
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
   
   const ITEMS_PER_PAGE = 10;
 
@@ -211,6 +221,263 @@ export default function LeaveManagementPage() {
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE + 1;
   const endIndex = Math.min(currentPage * ITEMS_PER_PAGE, leaveRequests.length);
 
+  // Handle individual approve/reject
+  const handleApprove = async () => {
+    if (!approvalModal.requestId) return;
+    
+    setProcessingRequestId(approvalModal.requestId);
+    try {
+      await leaveAPI.updateRequestStatus(approvalModal.requestId, 'approved');
+      setApprovalModal({ open: false, requestId: null });
+      setSuccessMessage('Leave request approved successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+      fetchData();
+    } catch (err: any) {
+      console.error('Error approving request:', err);
+      alert(err.response?.data?.message || 'Failed to approve request');
+    } finally {
+      setProcessingRequestId(null);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!rejectionModal.requestId) return;
+    
+    setProcessingRequestId(rejectionModal.requestId);
+    try {
+      await leaveAPI.updateRequestStatus(
+        rejectionModal.requestId,
+        'rejected',
+        rejectionReason
+      );
+      setRejectionModal({ open: false, requestId: null });
+      setRejectionReason('');
+      setSuccessMessage('Leave request rejected successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+      fetchData();
+    } catch (err: any) {
+      console.error('Error rejecting request:', err);
+      alert(err.response?.data?.message || 'Failed to reject request');
+    } finally {
+      setProcessingRequestId(null);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const baseClasses = 'px-2 py-1 text-xs font-medium rounded-full';
+    switch (status) {
+      case 'approved':
+        return (
+          <span className={`${baseClasses} bg-green-100 text-green-800`}>
+            APPROVED
+          </span>
+        );
+      case 'rejected':
+        return (
+          <span className={`${baseClasses} bg-red-100 text-red-800`}>
+            REJECTED
+          </span>
+        );
+      case 'cancelled':
+        return (
+          <span className={`${baseClasses} bg-gray-100 text-gray-800`}>
+            CANCELLED
+          </span>
+        );
+      default:
+        return (
+          <span className={`${baseClasses} bg-yellow-100 text-yellow-800`}>
+            PENDING
+          </span>
+        );
+    }
+  };
+
+  // Handle checkbox selection
+  const handleCheckboxChange = (requestId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedLeaveIds([...selectedLeaveIds, requestId]);
+    } else {
+      setSelectedLeaveIds(selectedLeaveIds.filter(id => id !== requestId));
+    }
+  };
+
+  // Handle select all (only pending requests)
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      const pendingIds = paginatedRequests
+        .filter(req => req.status === 'pending')
+        .map(req => req.id);
+      setSelectedLeaveIds([...new Set([...selectedLeaveIds, ...pendingIds])]);
+    } else {
+      const visibleIds = paginatedRequests.map(req => req.id);
+      setSelectedLeaveIds(selectedLeaveIds.filter(id => !visibleIds.includes(id)));
+    }
+  };
+
+  // Check if all pending requests on current page are selected
+  const pendingRequests = paginatedRequests.filter(req => req.status === 'pending');
+  const allPendingSelected = pendingRequests.length > 0 && 
+    pendingRequests.every(req => selectedLeaveIds.includes(req.id));
+  const somePendingSelected = pendingRequests.some(req => selectedLeaveIds.includes(req.id));
+
+  // Define columns for the table
+  const columns = [
+    {
+      key: 'checkbox',
+      header: 'Select',
+      renderHeader: () => (
+        <div className="flex items-center justify-center h-full">
+          <input
+            type="checkbox"
+            checked={allPendingSelected && pendingRequests.length > 0}
+            ref={(input) => {
+              if (input) input.indeterminate = somePendingSelected && !allPendingSelected;
+            }}
+            onChange={(e) => handleSelectAll(e.target.checked)}
+            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
+            title={allPendingSelected ? "Deselect all" : "Select all pending requests"}
+          />
+        </div>
+      ),
+      render: (item: LeaveRequest) => {
+        const isPending = item.status === 'pending';
+        const isChecked = selectedLeaveIds.includes(item.id);
+        
+        return (
+          <div className="flex items-center justify-center h-full">
+            <input
+              type="checkbox"
+              checked={isChecked}
+              disabled={!isPending}
+              onChange={(e) => {
+                e.stopPropagation();
+                handleCheckboxChange(item.id, e.target.checked);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className={`h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded ${
+                isPending ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+              }`}
+            />
+          </div>
+        );
+      },
+    },
+    {
+      key: 'employee',
+      header: 'Employee',
+      render: (item: LeaveRequest) => (
+        <div className="min-w-0">
+          <div className="font-medium text-gray-900 truncate">{item.employee_name}</div>
+          <div className="text-xs text-gray-500 truncate">{item.employee_email}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'project',
+      header: 'Project',
+      render: (item: LeaveRequest) => (
+        <div className="min-w-0 max-w-xs">
+          <div className="text-sm text-gray-900 break-words">{item.project_name || 'Not assigned'}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'leave_type',
+      header: 'Leave Type',
+      render: (item: LeaveRequest) => {
+        const typeColors: Record<string, string> = {
+          'ANNUAL': 'bg-blue-100 text-blue-800',
+          'SICK': 'bg-green-100 text-green-800',
+          'UNPAID': 'bg-gray-100 text-gray-800',
+        };
+        const colorClass = typeColors[item.leave_type_code?.toUpperCase() || ''] || 'bg-gray-100 text-gray-800';
+        return (
+          <span className={`px-2 py-1 text-xs font-medium rounded-full ${colorClass}`}>
+            {item.leave_type_name}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'dates',
+      header: 'Date Range',
+      render: (item: LeaveRequest) => {
+        const start = new Date(item.start_date).toLocaleDateString('en-GB');
+        const end = new Date(item.end_date).toLocaleDateString('en-GB');
+        return (
+          <div>
+            <div className="text-sm text-gray-900">{start} - {end}</div>
+            <div className="text-xs text-gray-500">{item.number_of_days} day{item.number_of_days !== 1 ? 's' : ''}</div>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (item: LeaveRequest) => getStatusBadge(item.status),
+    },
+    {
+      key: 'actions',
+      header: 'Action',
+      render: (item: LeaveRequest) => (
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
+          {item.status === 'pending' && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setApprovalModal({ open: true, requestId: item.id, request: item });
+                }}
+                disabled={processingRequestId === item.id}
+                className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white text-xs font-medium rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Approve"
+              >
+                <CheckCircle2 className="h-3 w-3" />
+                <span>Approve</span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRejectionModal({ open: true, requestId: item.id, request: item });
+                }}
+                disabled={processingRequestId === item.id}
+                className="flex items-center gap-1 px-2 py-1 bg-red-600 text-white text-xs font-medium rounded hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Reject"
+              >
+                <XCircle className="h-3 w-3" />
+                <span>Reject</span>
+              </button>
+            </>
+          )}
+          {item.status === 'approved' && item.approved_by_name && (
+            <div className="text-xs text-gray-500">
+              <div>Approved by {item.approved_by_name}</div>
+              {item.approved_at && (
+                <div className="text-gray-400">
+                  {new Date(item.approved_at).toLocaleDateString('en-GB')}
+                </div>
+              )}
+            </div>
+          )}
+          {item.status === 'rejected' && (
+            <div className="text-xs text-gray-500">
+              <div>Rejected</div>
+              {item.rejection_reason && (
+                <div className="text-gray-400 max-w-xs truncate" title={item.rejection_reason}>
+                  {item.rejection_reason.length > 30 
+                    ? item.rejection_reason.substring(0, 30) + '...' 
+                    : item.rejection_reason}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ),
+    },
+  ];
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -350,9 +617,9 @@ export default function LeaveManagementPage() {
               onClick={() => {
                 setShowRequestForm(true);
               }}
-              className="flex items-center justify-center space-x-1.5 bg-primary-600 text-white px-3 py-1 rounded-lg hover:bg-primary-700 transition-colors whitespace-nowrap mt-6 sm:mt-0 text-sm"
+              className="flex items-center justify-center space-x-1 bg-primary-600 text-white px-2 py-px rounded hover:bg-primary-700 transition-colors whitespace-nowrap mt-6 sm:mt-0 text-xs leading-tight"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3 w-3" />
               <span>Request Leave</span>
             </button>
           </div>
@@ -460,26 +727,37 @@ export default function LeaveManagementPage() {
       )}
 
       {/* Leave Requests Table */}
-      <Card title="Leave Requests">
-        {leaveRequests.length > 0 && (
-          <p className="text-sm text-gray-600 mb-4">
-            Showing {startIndex} - {endIndex} of {leaveRequests.length} requests
-          </p>
-        )}
-        <LeaveApprovalTable
-          requests={paginatedRequests}
-          onUpdate={fetchData}
-          selectedLeaveIds={selectedLeaveIds}
-          onSelectionChange={setSelectedLeaveIds}
-        />
-        {totalPages > 1 && (
-          <Pagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={setCurrentPage}
+      {leaveRequests.length === 0 ? (
+        <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+          <p className="text-gray-500">No leave requests found</p>
+        </div>
+      ) : (
+        <>
+          <Table
+            columns={columns}
+            data={paginatedRequests}
+            keyExtractor={(item) => item.id}
+            emptyMessage="No leave requests found"
           />
-        )}
-      </Card>
+          {totalPages > 1 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <div className="flex flex-col items-center space-y-3">
+                <div className="text-sm text-gray-600">
+                  Showing {startIndex} to {endIndex} of {leaveRequests.length} requests
+                </div>
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={(page) => {
+                    setCurrentPage(page);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {/* Leave Request Form Modal */}
       {showRequestForm && (
@@ -520,6 +798,148 @@ export default function LeaveManagementPage() {
               className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isBulkApproving ? 'Approving...' : 'Approve Selected'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Approval Confirmation Modal */}
+      <Modal
+        isOpen={approvalModal.open}
+        onClose={() => {
+          setApprovalModal({ open: false, requestId: null });
+        }}
+        title="Approve Leave Request"
+      >
+        <div className="space-y-4">
+          {approvalModal.request && (
+            <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Employee:</span>
+                <span className="text-sm text-gray-900">{approvalModal.request.employee_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Project:</span>
+                <span className="text-sm text-gray-900">{approvalModal.request.project_name || 'Not assigned'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Leave Type:</span>
+                <span className="text-sm text-gray-900">{approvalModal.request.leave_type_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Date Range:</span>
+                <span className="text-sm text-gray-900">
+                  {new Date(approvalModal.request.start_date).toLocaleDateString('en-GB')} - {new Date(approvalModal.request.end_date).toLocaleDateString('en-GB')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Days:</span>
+                <span className="text-sm text-gray-900">{approvalModal.request.number_of_days} day{approvalModal.request.number_of_days !== 1 ? 's' : ''}</span>
+              </div>
+              {approvalModal.request.reason && (
+                <div className="mt-2 pt-2 border-t border-gray-200">
+                  <span className="text-sm font-medium text-gray-700">Reason:</span>
+                  <p className="text-sm text-gray-900 mt-1">{approvalModal.request.reason}</p>
+                </div>
+              )}
+            </div>
+          )}
+          <p className="text-sm text-gray-600">
+            Are you sure you want to approve this leave request?
+          </p>
+          <div className="flex justify-end space-x-3 pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setApprovalModal({ open: false, requestId: null });
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleApprove}
+              disabled={processingRequestId !== null}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {processingRequestId ? 'Approving...' : 'Approve Request'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Rejection Modal */}
+      <Modal
+        isOpen={rejectionModal.open}
+        onClose={() => {
+          setRejectionModal({ open: false, requestId: null });
+          setRejectionReason('');
+        }}
+        title="Reject Leave Request"
+      >
+        <div className="space-y-4">
+          {rejectionModal.request && (
+            <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Employee:</span>
+                <span className="text-sm text-gray-900">{rejectionModal.request.employee_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Project:</span>
+                <span className="text-sm text-gray-900">{rejectionModal.request.project_name || 'Not assigned'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Leave Type:</span>
+                <span className="text-sm text-gray-900">{rejectionModal.request.leave_type_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Date Range:</span>
+                <span className="text-sm text-gray-900">
+                  {new Date(rejectionModal.request.start_date).toLocaleDateString('en-GB')} - {new Date(rejectionModal.request.end_date).toLocaleDateString('en-GB')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm font-medium text-gray-700">Days:</span>
+                <span className="text-sm text-gray-900">{rejectionModal.request.number_of_days} day{rejectionModal.request.number_of_days !== 1 ? 's' : ''}</span>
+              </div>
+              {rejectionModal.request.reason && (
+                <div className="mt-2 pt-2 border-t border-gray-200">
+                  <span className="text-sm font-medium text-gray-700">Reason:</span>
+                  <p className="text-sm text-gray-900 mt-1">{rejectionModal.request.reason}</p>
+                </div>
+              )}
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Rejection Reason *
+            </label>
+            <textarea
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              rows={3}
+              required
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              placeholder="Enter reason for rejection..."
+            />
+          </div>
+          <div className="flex justify-end space-x-3 pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setRejectionModal({ open: false, requestId: null });
+                setRejectionReason('');
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleReject}
+              disabled={!rejectionReason.trim() || processingRequestId !== null}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {processingRequestId ? 'Rejecting...' : 'Reject Request'}
             </button>
           </div>
         </div>
