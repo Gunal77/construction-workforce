@@ -1,22 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
   typescript: {
-    // ⚠️ Dangerously allow production builds to successfully complete even if
-    // your project has type errors. Only use temporarily for deployment.
     ignoreBuildErrors: true,
   },
   eslint: {
-    // Warning: This allows production builds to successfully complete even if
-    // your project has ESLint errors.
     ignoreDuringBuilds: true,
   },
-  experimental: {
-    // Disable static page generation errors during build
-    workerThreads: false,
-    cpus: 1,
-  },
+  // Don't use static export - we need server functions
+  output: undefined,
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {
