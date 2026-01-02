@@ -301,6 +301,14 @@ export const projectsAPI = {
     if (!response.ok) throw { response: { status: response.status, data } };
     return data;
   },
+  getEmployeeProjects: async (employeeId: string) => {
+    const response = await fetch(`/api/proxy/employees/${employeeId}/projects`, {
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data } };
+    return data;
+  },
   getAvailableEmployees: async (projectId: string, params?: {
     search?: string;
     page?: number;
