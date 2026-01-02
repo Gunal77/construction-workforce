@@ -75,7 +75,7 @@ export default function AttendancePage() {
       setWorkers(fetchedWorkers);
       // Fetch last end dates immediately after workers are loaded
       if (fetchedWorkers.length > 0) {
-        const employeeIds = fetchedWorkers.map(w => w.id);
+        const employeeIds = fetchedWorkers.map((w: Employee) => w.id);
         lastEndDateAPI.getAll({ employeeIds }).then(response => {
           const datesMap: Record<string, string | null> = {};
           (response.lastEndDates || []).forEach((item: any) => {
@@ -88,6 +88,22 @@ export default function AttendancePage() {
       }
     } catch (err: any) {
       console.error('Error fetching workers:', err);
+    }
+  };
+
+  const fetchLastEndDates = async () => {
+    try {
+      if (workers.length > 0) {
+        const employeeIds = workers.map((w: Employee) => w.id);
+        const response = await lastEndDateAPI.getAll({ employeeIds });
+        const datesMap: Record<string, string | null> = {};
+        (response.lastEndDates || []).forEach((item: any) => {
+          datesMap[item.employee_id] = item.last_end_date;
+        });
+        setLastEndDates(datesMap);
+      }
+    } catch (err) {
+      console.error('Error fetching last end dates:', err);
     }
   };
 
