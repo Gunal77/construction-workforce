@@ -9,11 +9,6 @@ export const metadata: Metadata = {
   description: 'Enterprise Workforce Management Platform',
 }
 
-// Force dynamic rendering for all pages
-export const dynamic = 'force-dynamic'
-export const dynamicParams = true
-export const revalidate = 0
-
 export default function RootLayout({
   children,
 }: {
