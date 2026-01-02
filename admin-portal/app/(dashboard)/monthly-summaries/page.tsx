@@ -242,39 +242,39 @@ export default function MonthlySummariesPage() {
       setIsExportingPDF(true);
       setError('');
       
-      // Export all approved summaries - create a combined PDF or export individually
-      // For now, we'll export the first one as an example, but ideally we'd create a combined report
-      if (approvedSummaries.length > 0) {
-        const response = await fetch(`/api/proxy/export/monthly-summaries/${approvedSummaries[0].id}/pdf`, {
-          credentials: 'include',
-        });
+      // Export all approved summaries in one PDF
+      const summaryIds = approvedSummaries.map(s => s.id);
+      const response = await fetch('/api/proxy/export/monthly-summaries/bulk/pdf', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ summaryIds }),
+      });
 
-        if (!response.ok) {
-          let errorMessage = 'Failed to export PDF';
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.error || errorData.message || errorMessage;
-          } catch (e) {
-            // If response is not JSON, try to get text
-            const text = await response.text().catch(() => '');
-            if (text) errorMessage = text;
-          }
-          throw new Error(errorMessage);
+      if (!response.ok) {
+        let errorMessage = 'Failed to export PDF';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } catch (e) {
+          // If response is not JSON, try to get text
+          const text = await response.text().catch(() => '');
+          if (text) errorMessage = text;
         }
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-          'July', 'August', 'September', 'October', 'November', 'December'];
-        const firstSummary = approvedSummaries[0];
-        a.download = `monthly-summaries-${monthNames[firstSummary.month - 1]}-${firstSummary.year}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+        throw new Error(errorMessage);
       }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `monthly-summaries-bulk-${Date.now()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (err: any) {
       setError(err.message || 'Failed to export PDF');
     } finally {
@@ -293,39 +293,39 @@ export default function MonthlySummariesPage() {
       setIsExportingExcel(true);
       setError('');
       
-      // Export all approved summaries - create a combined Excel or export individually
-      // For now, we'll export the first one as an example
-      if (approvedSummaries.length > 0) {
-        const response = await fetch(`/api/proxy/export/monthly-summaries/${approvedSummaries[0].id}/excel`, {
-          credentials: 'include',
-        });
+      // Export all approved summaries in one Excel file
+      const summaryIds = approvedSummaries.map(s => s.id);
+      const response = await fetch('/api/proxy/export/monthly-summaries/bulk/excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ summaryIds }),
+      });
 
-        if (!response.ok) {
-          let errorMessage = 'Failed to export Excel';
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.error || errorData.message || errorMessage;
-          } catch (e) {
-            // If response is not JSON, try to get text
-            const text = await response.text().catch(() => '');
-            if (text) errorMessage = text;
-          }
-          throw new Error(errorMessage);
+      if (!response.ok) {
+        let errorMessage = 'Failed to export Excel';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } catch (e) {
+          // If response is not JSON, try to get text
+          const text = await response.text().catch(() => '');
+          if (text) errorMessage = text;
         }
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-          'July', 'August', 'September', 'October', 'November', 'December'];
-        const firstSummary = approvedSummaries[0];
-        a.download = `monthly-summaries-${monthNames[firstSummary.month - 1]}-${firstSummary.year}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+        throw new Error(errorMessage);
       }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `monthly-summaries-bulk-${Date.now()}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (err: any) {
       setError(err.message || 'Failed to export Excel');
     } finally {

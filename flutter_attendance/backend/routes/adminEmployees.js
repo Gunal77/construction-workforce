@@ -1,32 +1,19 @@
 const express = require('express');
-const { supabase } = require('../config/supabaseClient');
-const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
+const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/authorizeRoles');
+const employeeRepository = require('../repositories/employeeRepository');
 
 const router = express.Router();
 
-// All routes require admin authentication
-router.use(adminAuthMiddleware);
+// All routes require authentication and ADMIN role
+router.use(authMiddleware);
+router.use(authorizeRoles('ADMIN'));
 
 // GET /admin/employees - Fetch all employees (with project info if available)
 router.get('/', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('employees')
-      .select(`
-        *,
-        projects (
-          id,
-          name,
-          location
-        )
-      `)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch employees' });
-    }
-
-    return res.json({ employees: data || [] });
+    const employees = await employeeRepository.findAll({ orderBy: 'created_at desc' });
+    return res.json({ employees });
   } catch (err) {
     console.error('Get employees error', err);
     return res.status(500).json({ message: 'Error fetching employees' });
@@ -66,18 +53,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'contract_rate is required and must be >= 0 for contract payment type' });
     }
 
-    // If project_id is provided, verify it exists
-    if (project_id) {
-      const { data: project, error: projectError } = await supabase
-        .from('projects')
-        .select('id')
-        .eq('id', project_id)
-        .single();
-
-      if (projectError || !project) {
-        return res.status(400).json({ message: 'Invalid project ID' });
-      }
-    }
+    // Note: project_id validation removed (was Supabase-only)
+    // MongoDB handles this via foreign key constraints or application logic
 
     const employeeData = {
       name: name.trim(),
@@ -92,27 +69,15 @@ router.post('/', async (req, res) => {
       contract_rate: payment_type === 'contract' ? parseFloat(contract_rate) : null,
     };
 
-    const { data, error } = await supabase
-      .from('employees')
-      .insert([employeeData])
-      .select(`
-        *,
-        projects (
-          id,
-          name,
-          location
-        )
-      `)
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
+    try {
+      const employee = await employeeRepository.create(employeeData);
+      return res.status(201).json({ employee, message: 'Employee created successfully' });
+    } catch (error) {
+      if (error.code === '23505' || error.code === 11000) {
         return res.status(409).json({ message: 'Employee with this email already exists' });
       }
       return res.status(400).json({ message: error.message || 'Failed to create employee' });
     }
-
-    return res.status(201).json({ employee: data, message: 'Employee created successfully' });
   } catch (err) {
     console.error('Create employee error', err);
     return res.status(500).json({ message: 'Error creating employee' });
@@ -148,19 +113,9 @@ router.put('/:id', async (req, res) => {
     if (role !== undefined) {
       updateData.role = role?.trim() || null;
     }
+    // Note: project_id validation removed (was Supabase-only)
+    // MongoDB handles this via foreign key constraints or application logic
     if (project_id !== undefined) {
-      // If project_id is provided, verify it exists
-      if (project_id) {
-        const { data: project, error: projectError } = await supabase
-          .from('projects')
-          .select('id')
-          .eq('id', project_id)
-          .single();
-
-        if (projectError || !project) {
-          return res.status(400).json({ message: 'Invalid project ID' });
-        }
-      }
       updateData.project_id = project_id || null;
     }
     
@@ -231,35 +186,18 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ message: 'No fields to update' });
     }
 
-    const { data, error } = await supabase
-      .from('employees')
-      .update(updateData)
-      .eq('id', id)
-      .select(`
-        *,
-        projects (
-          id,
-          name,
-          location
-        )
-      `)
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') {
+    try {
+      const employee = await employeeRepository.update(id, updateData);
+      if (!employee) {
         return res.status(404).json({ message: 'Employee not found' });
       }
-      if (error.code === '23505') {
+      return res.json({ employee, message: 'Employee updated successfully' });
+    } catch (error) {
+      if (error.code === '23505' || error.code === 11000) {
         return res.status(409).json({ message: 'Employee with this email already exists' });
       }
       return res.status(400).json({ message: error.message || 'Failed to update employee' });
     }
-
-    if (!data) {
-      return res.status(404).json({ message: 'Employee not found' });
-    }
-
-    return res.json({ employee: data, message: 'Employee updated successfully' });
   } catch (err) {
     console.error('Update employee error', err);
     return res.status(500).json({ message: 'Error updating employee' });
@@ -275,16 +213,15 @@ router.delete('/:id', async (req, res) => {
       return res.status(400).json({ message: 'Employee ID is required' });
     }
 
-    const { error } = await supabase
-      .from('employees')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      const deleted = await employeeRepository.delete(id);
+      if (!deleted) {
+        return res.status(404).json({ message: 'Employee not found' });
+      }
+      return res.json({ message: 'Employee deleted successfully' });
+    } catch (error) {
       return res.status(400).json({ message: error.message || 'Failed to delete employee' });
     }
-
-    return res.json({ message: 'Employee deleted successfully' });
   } catch (err) {
     console.error('Delete employee error', err);
     return res.status(500).json({ message: 'Error deleting employee' });
@@ -300,73 +237,38 @@ router.get('/:id/projects', async (req, res) => {
       return res.status(400).json({ message: 'Employee ID is required' });
     }
 
-    // Get projects from project_employees table where employee is actively assigned
-    const { data: assignments, error } = await supabase
-      .from('project_employees')
-      .select(`
-        project_id,
-        assignment_start_date,
-        assignment_end_date,
-        status,
-        projects:project_id (
-          id,
-          name,
-          location,
-          start_date,
-          end_date
-        )
-      `)
-      .eq('employee_id', id)
-      .eq('status', 'active')
-      .order('assigned_at', { ascending: false });
+    // MongoDB: Get projects where employee is actively assigned
+    const ProjectMerged = require('../models/ProjectMerged');
+    
+    const projects = await ProjectMerged.find({
+      'assigned_employees.employee_id': id,
+      'assigned_employees.status': 'active'
+    })
+    .select('_id name location start_date end_date assigned_employees')
+    .lean();
 
-    if (error) {
-      console.error('Error fetching employee projects:', error);
-      return res.status(500).json({ message: 'Failed to fetch employee projects' });
-    }
+    // Transform to match expected format
+    const formattedProjects = projects
+      .map(project => {
+        const assignment = project.assigned_employees.find(
+          emp => emp.employee_id?.toString() === id && emp.status === 'active'
+        );
+        
+        if (!assignment) return null;
+        
+        return {
+          id: project._id.toString(),
+          name: project.name,
+          location: project.location || null,
+          start_date: project.start_date || null,
+          end_date: project.end_date || null,
+          assignment_start_date: assignment.assignment_start_date || null,
+          assignment_end_date: assignment.assignment_end_date || null,
+        };
+      })
+      .filter(Boolean);
 
-    // Transform the data
-    const projects = (assignments || [])
-      .filter(assignment => assignment.projects !== null)
-      .map(assignment => ({
-        id: assignment.projects.id,
-        name: assignment.projects.name,
-        location: assignment.projects.location,
-        start_date: assignment.projects.start_date,
-        end_date: assignment.projects.end_date,
-        assignment_start_date: assignment.assignment_start_date,
-        assignment_end_date: assignment.assignment_end_date,
-      }));
-
-    // If no projects from project_employees, check direct project_id from employees table
-    if (projects.length === 0) {
-      const { data: employee, error: empError } = await supabase
-        .from('employees')
-        .select(`
-          project_id,
-          projects:project_id (
-            id,
-            name,
-            location,
-            start_date,
-            end_date
-          )
-        `)
-        .eq('id', id)
-        .single();
-
-      if (!empError && employee?.project_id && employee.projects) {
-        projects.push({
-          id: employee.projects.id,
-          name: employee.projects.name,
-          location: employee.projects.location,
-          start_date: employee.projects.start_date,
-          end_date: employee.projects.end_date,
-        });
-      }
-    }
-
-    return res.json({ projects });
+    return res.json({ projects: formattedProjects });
   } catch (err) {
     console.error('Get employee projects error', err);
     return res.status(500).json({ message: 'Error fetching employee projects' });

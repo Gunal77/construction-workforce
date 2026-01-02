@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Building2, MapPin, Calendar, DollarSign, Search, X } from 'lucide-react';
 import ProjectCard from '@/components/ProjectCard';
+import Pagination from '@/components/Pagination';
 
 interface Project {
   id: string;
@@ -19,6 +20,8 @@ interface Project {
   status?: string;
 }
 
+const ITEMS_PER_PAGE = 9;
+
 export default function ClientProjectsPage() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -26,15 +29,26 @@ export default function ClientProjectsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [error, setError] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalProjects, setTotalProjects] = useState(0);
+  const [allProjects, setAllProjects] = useState<Project[]>([]); // Store all projects for search
 
   useEffect(() => {
     fetchProjects();
-  }, []);
+  }, [currentPage]);
+
+  // Fetch all projects when search is active
+  useEffect(() => {
+    if (searchQuery) {
+      fetchAllProjects();
+    }
+  }, [searchQuery]);
 
   const fetchProjects = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/proxy/client/projects', {
+      const response = await fetch(`/api/proxy/client/projects?page=${currentPage}&limit=${ITEMS_PER_PAGE}`, {
         credentials: 'include',
       });
 
@@ -44,6 +58,8 @@ export default function ClientProjectsPage() {
 
       const data = await response.json();
       setProjects(data.projects || []);
+      setTotalPages(data.totalPages || 1);
+      setTotalProjects(data.total || 0);
     } catch (err: any) {
       setError(err.message || 'Failed to load projects');
     } finally {
@@ -51,24 +67,50 @@ export default function ClientProjectsPage() {
     }
   };
 
+  const fetchAllProjects = async () => {
+    try {
+      // Fetch all projects for search (use a large limit)
+      const response = await fetch(`/api/proxy/client/projects?page=1&limit=1000`, {
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setAllProjects(data.projects || []);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch all projects for search:', err);
+    }
+  };
+
   const handleSearch = () => {
     setSearchQuery(searchInput);
+    setCurrentPage(1); // Reset to first page when searching
   };
 
   const handleClearSearch = () => {
     setSearchInput('');
     setSearchQuery('');
+    setCurrentPage(1); // Reset to first page when clearing
   };
 
-  const filteredProjects = projects.filter((project) => {
-    if (!searchQuery) return true;
+  // Filter projects client-side (after fetching from server)
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery) return projects;
     const query = searchQuery.toLowerCase();
-    return (
+    // When searching, filter from allProjects; otherwise use paginated projects
+    const sourceProjects = searchQuery ? allProjects : projects;
+    return sourceProjects.filter((project) => 
       project.name?.toLowerCase().includes(query) ||
       project.location?.toLowerCase().includes(query) ||
       project.description?.toLowerCase().includes(query)
     );
-  });
+  }, [projects, allProjects, searchQuery]);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   if (loading) {
     return (
@@ -139,7 +181,11 @@ export default function ClientProjectsPage() {
       </div>
 
       {/* Projects Grid */}
-      {filteredProjects.length === 0 ? (
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="text-gray-500">Loading projects...</div>
+        </div>
+      ) : filteredProjects.length === 0 ? (
         <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
           <Building2 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-500">
@@ -147,24 +193,39 @@ export default function ClientProjectsPage() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredProjects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onClick={() => router.push(`/client/projects/${project.id}`)}
-              hideClientInfo={true}
-              isAdmin={false}
-            />
-          ))}
-        </div>
-      )}
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredProjects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onClick={() => router.push(`/client/projects/${project.id}`)}
+                hideClientInfo={true}
+                isAdmin={false}
+              />
+            ))}
+          </div>
 
-      {/* Project Count */}
-      {filteredProjects.length > 0 && (
-        <p className="text-sm text-gray-600 text-center">
-          Showing {filteredProjects.length} of {projects.length} projects
-        </p>
+          {/* Pagination */}
+          {!searchQuery && totalPages > 1 && (
+            <div className="mt-6">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={handlePageChange}
+              />
+            </div>
+          )}
+
+          {/* Project Count */}
+          <p className="text-sm text-gray-600 text-center mt-4">
+            {searchQuery ? (
+              <>Showing {filteredProjects.length} matching project{filteredProjects.length !== 1 ? 's' : ''}</>
+            ) : (
+              <>Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1} to {Math.min(currentPage * ITEMS_PER_PAGE, totalProjects)} of {totalProjects} project{totalProjects !== 1 ? 's' : ''}</>
+            )}
+          </p>
+        </>
       )}
     </div>
   );

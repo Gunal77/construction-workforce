@@ -92,10 +92,11 @@ const sendLeaveRequestNotification = async (leaveRequest, employee) => {
   `;
 
   // Get admin emails (all active admins)
-  const db = require('../config/db');
-  const { rows: admins } = await db.query(
-    "SELECT email FROM admins WHERE status = 'active' OR status IS NULL"
-  );
+  const User = require('../models/User');
+  const admins = await User.find({
+    role: 'ADMIN',
+    isActive: { $ne: false }
+  }).select('email').lean();
 
   const results = [];
   for (const admin of admins) {
@@ -180,10 +181,11 @@ const sendMonthlySummarySignNotification = async (summary, employee) => {
   `;
 
   // Get admin emails (all active admins)
-  const db = require('../config/db');
-  const { rows: admins } = await db.query(
-    "SELECT email FROM admins WHERE status = 'active' OR status IS NULL"
-  );
+  const User = require('../models/User');
+  const admins = await User.find({
+    role: 'ADMIN',
+    isActive: { $ne: false }
+  }).select('email').lean();
 
   const results = [];
   for (const admin of admins) {

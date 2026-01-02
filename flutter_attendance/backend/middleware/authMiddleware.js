@@ -1,39 +1,88 @@
-const db = require('../config/db');
 const { verifyToken } = require('../utils/jwt');
+const { getUserById } = require('../services/authService');
 
+/**
+ * JWT Authentication Middleware
+ * Verifies JWT token and attaches user data to req.user
+ */
 const authMiddleware = async (req, res, next) => {
-  const authHeader = req.headers.authorization || '';
-  const [scheme, token] = authHeader.split(' ');
-
-  if (!token || scheme !== 'Bearer') {
-    return res.status(401).json({ message: 'Authorization header missing or malformed' });
-  }
-
   try {
-    const decoded = verifyToken(token);
-    const { rows } = await db.query('SELECT id, email FROM users WHERE id = $1', [decoded.id]);
+    // Get token from Authorization header
+    const authHeader = req.headers.authorization;
 
-    if (!rows.length) {
-      return res.status(401).json({ message: 'User not found' });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authorization header missing or malformed. Please provide a valid Bearer token.',
+      });
     }
 
-    req.user = rows[0];
-    return next();
+    // Extract token
+    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token not provided',
+      });
+    }
+
+    // Verify token
+    let decoded;
+    try {
+      decoded = verifyToken(token);
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Token expired. Please log in again.',
+        });
+      }
+      if (error.name === 'JsonWebTokenError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token. Please log in again.',
+        });
+      }
+      throw error;
+    }
+
+    // Get user from database to ensure user still exists and is active
+    try {
+      const user = await getUserById(decoded.userId);
+
+      if (!user.isActive) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account is inactive. Please contact administrator.',
+        });
+      }
+
+      // Attach user data to request object
+      req.user = {
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      };
+
+      next();
+    } catch (error) {
+      if (error.message === 'User not found') {
+        return res.status(401).json({
+          success: false,
+          message: 'User not found. Please log in again.',
+        });
+      }
+      throw error;
+    }
   } catch (error) {
-    // Only log non-signature errors to reduce console spam
-    // Invalid signature usually means token was signed with different secret (user needs to re-login)
-    if (error.name !== 'JsonWebTokenError' || error.message !== 'invalid signature') {
-      console.error('Auth middleware error', error.name, error.message);
-    }
-    return res.status(401).json({ 
-      message: error.name === 'TokenExpiredError' 
-        ? 'Token expired. Please log in again.' 
-        : error.name === 'JsonWebTokenError' && error.message === 'invalid signature'
-        ? 'Invalid token. Please log out and log in again.'
-        : 'Invalid or expired token' 
+    console.error('Auth middleware error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Authentication error',
     });
   }
 };
 
 module.exports = authMiddleware;
-

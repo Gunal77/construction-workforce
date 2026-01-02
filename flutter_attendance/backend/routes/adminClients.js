@@ -1,61 +1,126 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/db');
 const bcrypt = require('bcrypt');
-const { requireAdmin } = require('../middleware/unifiedAuthMiddleware');
+const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/authorizeRoles');
 
-// All routes require admin authentication
-router.use(requireAdmin);
+// All routes require authentication and ADMIN role
+router.use(authMiddleware);
+router.use(authorizeRoles('ADMIN'));
 
 // GET all clients
 router.get('/', async (req, res) => {
   try {
     const { search, isActive, sortBy = 'created_at', sortOrder = 'DESC' } = req.query;
     
-    let query = `
-      SELECT 
-        u.id,
-        u.name,
-        u.email,
-        u.phone,
-        COALESCE(u.is_active, TRUE) as is_active,
-        u.created_at,
-        COALESCE((SELECT COUNT(*) FROM projects WHERE client_user_id = u.id), 0) as project_count,
-        COALESCE((SELECT COUNT(*) FROM supervisors WHERE client_user_id = u.id), 0) as supervisor_count,
-        COALESCE((SELECT COUNT(*) FROM employees WHERE client_user_id = u.id), 0) as staff_count
-      FROM users u
-      WHERE u.role = 'client'
-    `;
+    const User = require('../models/User');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
     
-    const values = [];
-    let paramCount = 1;
+    // Build MongoDB query
+    const query = { role: { $in: ['CLIENT', 'client'] } };
     
+    // Search filter
     if (search) {
-      query += ` AND (u.name ILIKE $${paramCount} OR u.email ILIKE $${paramCount} OR u.phone ILIKE $${paramCount})`;
-      values.push(`%${search}%`);
-      paramCount++;
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex }
+      ];
     }
     
+    // Active filter - User model uses 'isActive' (camelCase)
+    // When filtering for active, include clients where isActive is true, undefined, or null (defaults to active)
+    // When filtering for inactive, only include clients where isActive is explicitly false
     if (isActive !== undefined && isActive !== null && isActive !== '') {
-      const isActiveBool = isActive === 'true' || isActive === true;
-      query += ` AND COALESCE(u.is_active, TRUE) = $${paramCount}`;
-      values.push(isActiveBool);
-      paramCount++;
+      const isActiveBool = isActive === 'true' || isActive === true || isActive === 1;
+      if (isActiveBool) {
+        // For active: include true, undefined, or null (defaults to active)
+        // Combine with existing $or if search filter exists
+        if (query.$or) {
+          // If search filter exists, we need to use $and to combine both conditions
+          const searchOr = [...query.$or]; // Copy the search $or conditions
+          query.$and = [
+            { $or: searchOr },
+            {
+              $or: [
+                { isActive: true },
+                { isActive: { $exists: false } },
+                { isActive: null }
+              ]
+            }
+          ];
+          delete query.$or;
+        } else {
+          query.$or = [
+            { isActive: true },
+            { isActive: { $exists: false } },
+            { isActive: null }
+          ];
+        }
+      } else {
+        // For inactive: only explicitly false
+        query.isActive = false;
+      }
     }
     
-    // Validate sortBy to prevent SQL injection
+    // Validate sortBy
     const allowedSortColumns = ['name', 'email', 'created_at', 'updated_at'];
     const safeSort = allowedSortColumns.includes(sortBy) ? sortBy : 'created_at';
-    const safeOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    const sortDirection = sortOrder.toUpperCase() === 'ASC' ? 1 : -1;
+    const sort = { [safeSort]: sortDirection };
     
-    query += ` ORDER BY u.${safeSort} ${safeOrder}`;
+    // Fetch clients
+    const clients = await User.find(query).sort(sort).lean();
     
-    const result = await pool.query(query, values);
+    // Get counts for each client using aggregation
+    const clientsWithCounts = await Promise.all(
+      clients.map(async (client) => {
+        const clientId = client._id.toString();
+        
+        // Count projects - use 'client.client_id' (nested field) not 'client_user_id'
+        const projectCount = await ProjectMerged.countDocuments({
+          'client.client_id': clientId
+        });
+        
+        // Count supervisors (users with role SUPERVISOR assigned to client's projects)
+        const supervisorCount = await User.countDocuments({
+          role: { $in: ['SUPERVISOR', 'supervisor'] },
+          _id: { $in: await ProjectMerged.distinct('assigned_supervisors.supervisor_id', {
+            'client.client_id': clientId
+          }) }
+        });
+        
+        // Count staff (employees assigned to client's projects)
+        const staffCount = await EmployeeMerged.countDocuments({
+          $or: [
+            { client_user_id: clientId },
+            { 'project_assignments.project_id': { $in: await ProjectMerged.distinct('_id', {
+              'client.client_id': clientId
+            }) } }
+          ]
+        });
+        
+        return {
+          id: client._id.toString(),
+          name: client.name,
+          email: client.email,
+          phone: client.phone,
+          // User model uses 'isActive', but API returns 'is_active' for consistency
+          is_active: client.isActive === true || client.isActive === undefined || client.isActive === null ? true : false,
+          created_at: client.createdAt,
+          project_count: projectCount,
+          supervisor_count: supervisorCount,
+          staff_count: staffCount
+        };
+      })
+    );
     
     res.json({
       success: true,
-      data: result.rows,
-      count: result.rows.length
+      data: clientsWithCounts,
+      count: clientsWithCounts.length
     });
   } catch (error) {
     console.error('Error fetching clients:', error);
@@ -71,70 +136,143 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const mongoose = require('mongoose');
     
-    const query = `
-      SELECT 
-        u.id,
-        u.name,
-        u.email,
-        u.phone,
-        u.role,
-        COALESCE(u.is_active, TRUE) as is_active,
-        u.created_at
-      FROM users u
-      WHERE u.id = $1 AND u.role = 'client'
-    `;
+    const User = require('../models/User');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
     
-    const result = await pool.query(query, [id]);
+    if (!id || id.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid client ID format'
+      });
+    }
     
-    if (result.rows.length === 0) {
+    const clientId = id.trim();
+    
+    // Try to find client - handle both string UUIDs and MongoDB ObjectIds
+    let client = await User.findOne({
+      _id: clientId,
+      role: { $in: ['CLIENT', 'client'] }
+    }).lean();
+    
+    // If not found and ID looks like MongoDB ObjectId (24 hex chars), try with ObjectId
+    if (!client && mongoose.Types.ObjectId.isValid(clientId) && clientId.length === 24) {
+      try {
+        const objectId = new mongoose.Types.ObjectId(clientId);
+        // Query using the native collection to handle ObjectId _id
+        const UserCollection = User.collection;
+        const doc = await UserCollection.findOne({
+          _id: objectId,
+          role: { $in: ['CLIENT', 'client'] }
+        });
+        if (doc) {
+          // Convert to plain object
+          client = User.hydrate(doc).toObject();
+        }
+      } catch (err) {
+        console.log(`[GET CLIENT] Could not convert to ObjectId: ${err.message}`);
+      }
+    }
+    
+    if (!client) {
       return res.status(404).json({
         success: false,
         error: 'Client not found'
       });
     }
     
-    // Fetch associated projects - ONLY for this specific client
-    const projects = await pool.query(
-      `SELECT id, name, location, start_date, end_date, budget, created_at, description, client_user_id
-       FROM projects 
-       WHERE client_user_id = $1 AND client_user_id IS NOT NULL
-       ORDER BY created_at DESC`,
-      [id]
-    );
+    // Fetch associated projects - use 'client.client_id' (nested field) not 'client_user_id'
+    const projects = await ProjectMerged.find({
+      'client.client_id': clientId
+    }).sort({ created_at: -1 }).lean();
     
-    console.log(`[Client ${id}] Found ${projects.rows.length} projects assigned to this client`);
+    console.log(`[Client ${clientId}] Found ${projects.length} projects assigned to this client`);
     
-    // Fetch associated supervisors - ONLY for this specific client
-    const supervisors = await pool.query(
-      `SELECT id, name, email, phone, created_at, client_user_id
-       FROM supervisors 
-       WHERE client_user_id = $1 AND client_user_id IS NOT NULL
-       ORDER BY name`,
-      [id]
-    );
+    // Fetch associated supervisors (from projects' assigned_supervisors)
+    const supervisorIds = [];
+    projects.forEach(project => {
+      if (project.assigned_supervisors && Array.isArray(project.assigned_supervisors)) {
+        // Extract supervisor_id from each supervisor object
+        project.assigned_supervisors.forEach(sup => {
+          if (sup.supervisor_id) {
+            supervisorIds.push(sup.supervisor_id);
+          }
+        });
+      }
+    });
     
-    console.log(`[Client ${id}] Found ${supervisors.rows.length} supervisors assigned to this client`);
+    // User model uses string _id, so convert all supervisor IDs to strings
+    const uniqueSupervisorIds = [...new Set(supervisorIds.map(id => String(id).trim()))];
+    const supervisors = await User.find({
+      _id: { $in: uniqueSupervisorIds },
+      role: { $in: ['SUPERVISOR', 'supervisor'] }
+    }).sort({ name: 1 }).select('_id name email phone createdAt').lean();
     
-    // Fetch associated staff/employees - ONLY for this specific client
-    const staff = await pool.query(
-      `SELECT e.id, e.name, e.email, e.phone, e.role, e.project_id, e.client_user_id, p.name as project_name
-       FROM employees e
-       LEFT JOIN projects p ON e.project_id = p.id
-       WHERE e.client_user_id = $1 AND e.client_user_id IS NOT NULL
-       ORDER BY e.name`,
-      [id]
-    );
+    console.log(`[Client ${clientId}] Found ${supervisors.length} supervisors assigned to this client`);
     
-    console.log(`[Client ${id}] Found ${staff.rows.length} staff members assigned to this client`);
+    // Fetch associated staff/employees
+    const projectIds = projects.map(p => p._id.toString());
+    const staff = await EmployeeMerged.find({
+      $or: [
+        { client_user_id: clientId },
+        { 'project_assignments.project_id': { $in: projectIds } }
+      ]
+    }).sort({ name: 1 }).lean();
+    
+    // Enrich staff with project names
+    const staffWithProjects = staff.map(emp => {
+      const projectAssignment = emp.project_assignments?.find(pa => 
+        projectIds.includes(pa.project_id?.toString())
+      );
+      const project = projects.find(p => p._id.toString() === projectAssignment?.project_id?.toString());
+      
+      return {
+        id: emp._id.toString(),
+        name: emp.name,
+        email: emp.email,
+        phone: emp.phone,
+        role: emp.role,
+        project_id: projectAssignment?.project_id?.toString() || null,
+        client_user_id: emp.client_user_id || clientId, // Keep for backward compatibility
+        project_name: project?.name || null
+      };
+    });
+    
+    console.log(`[Client ${clientId}] Found ${staffWithProjects.length} staff members assigned to this client`);
     
     res.json({
       success: true,
       data: {
-        ...result.rows[0],
-        projects: projects.rows,
-        supervisors: supervisors.rows,
-        staff: staff.rows
+        id: client._id.toString(),
+        name: client.name,
+        email: client.email,
+        phone: client.phone,
+        role: client.role,
+        // User model uses 'isActive', but API returns 'is_active' for consistency
+        is_active: client.isActive === true || client.isActive === undefined || client.isActive === null ? true : false,
+        created_at: client.createdAt || client.created_at,
+        projects: projects.map(p => ({
+          id: p._id.toString(),
+          name: p.name,
+          location: p.location,
+          start_date: p.start_date,
+          end_date: p.end_date,
+          budget: p.budget ? parseFloat(p.budget.toString()) : null,
+          created_at: p.created_at,
+          description: p.description,
+          client_user_id: p.client?.client_id || p.client_user_id
+        })),
+        supervisors: supervisors.map(s => ({
+          id: s._id.toString(),
+          name: s.name,
+          email: s.email,
+          phone: s.phone,
+          created_at: s.createdAt || s.created_at,
+          client_user_id: clientId
+        })),
+        staff: staffWithProjects
       }
     });
   } catch (error) {
@@ -150,10 +288,13 @@ router.get('/:id', async (req, res) => {
 // POST create new client
 router.post('/', async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, password, is_active } = req.body;
+    
+    console.log('[CREATE CLIENT] Request received:', { name, email, phone: phone ? '***' : null, hasPassword: !!password, is_active });
     
     // Validation
     if (!name || !email || !password) {
+      console.log('[CREATE CLIENT] Validation failed: missing required fields');
       return res.status(400).json({
         success: false,
         error: 'Name, email, and password are required'
@@ -163,6 +304,7 @@ router.post('/', async (req, res) => {
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      console.log('[CREATE CLIENT] Validation failed: invalid email format');
       return res.status(400).json({
         success: false,
         error: 'Invalid email format'
@@ -171,39 +313,58 @@ router.post('/', async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
     
-    // Check if email already exists
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE LOWER(email) = $1',
-      [normalizedEmail]
-    );
+    const User = require('../models/User');
+    const uuid = require('uuid');
     
-    if (existingUser.rows.length > 0) {
+    // Check if email already exists
+    const existingUser = await User.findOne({
+      email: normalizedEmail
+    }).lean();
+    
+    if (existingUser) {
+      console.log('[CREATE CLIENT] Email already exists:', normalizedEmail);
       return res.status(409).json({
         success: false,
         error: 'Email already exists'
       });
     }
     
-    // Hash password
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    // Create new client user
+    // User model uses 'isActive' (camelCase) and 'password' (not password_hash)
+    // _id is required and must be a string (UUID)
+    const clientId = uuid.v4();
+    console.log('[CREATE CLIENT] Creating user with ID:', clientId);
     
-    // Insert into users table with role='client' and is_active=TRUE
-    const query = `
-      INSERT INTO users (email, password_hash, role, name, phone, is_active, created_at)
-      VALUES ($1, $2, 'client', $3, $4, TRUE, NOW())
-      RETURNING id, email, name, phone, role, is_active, created_at
-    `;
+    const newClient = new User({
+      _id: clientId,
+      email: normalizedEmail,
+      password: password, // User model will hash it in pre-save hook
+      role: 'CLIENT',
+      name: name.trim(),
+      phone: phone ? phone.trim() : null,
+      isActive: is_active !== undefined ? (is_active === true || is_active === 'true') : true
+    });
     
-    const result = await pool.query(query, [normalizedEmail, passwordHash, name, phone]);
+    console.log('[CREATE CLIENT] Saving user to database...');
+    await newClient.save();
+    console.log('[CREATE CLIENT] User saved successfully:', newClient._id);
     
     res.status(201).json({
       success: true,
       message: 'Client created successfully',
-      data: result.rows[0]
+      data: {
+        id: newClient._id.toString(),
+        email: newClient.email,
+        name: newClient.name,
+        phone: newClient.phone,
+        role: newClient.role,
+        is_active: newClient.isActive === true, // User model uses 'isActive', API returns 'is_active'
+        created_at: newClient.createdAt
+      }
     });
   } catch (error) {
-    console.error('Error creating client:', error);
+    console.error('[CREATE CLIENT] Error creating client:', error);
+    console.error('[CREATE CLIENT] Error stack:', error.stack);
     res.status(500).json({
       success: false,
       error: 'Failed to create client',
@@ -218,34 +379,99 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { name, email, phone, password, is_active } = req.body;
     
-    // Check if user exists and is a client
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE id = $1 AND role = $2',
-      [id, 'client']
-    );
+    console.log(`[UPDATE CLIENT] ID: ${id}, is_active: ${is_active} (type: ${typeof is_active})`);
     
-    if (existingUser.rows.length === 0) {
+    const User = require('../models/User');
+    
+    // User model uses string _id, so use the ID directly
+    if (!id || id.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid client ID format'
+      });
+    }
+    
+    const clientId = id.trim();
+    const mongoose = require('mongoose');
+    
+    console.log(`[UPDATE CLIENT] Looking for client with ID: ${clientId} (length: ${clientId.length})`);
+    
+    // Check if user exists and is a client
+    // Handle both UUID strings and MongoDB ObjectIds
+    let existingUser = null;
+    let actualId = null; // Store the actual _id format for updates
+    
+    // Try finding by string ID first (UUID format)
+    existingUser = await User.findOne({
+      _id: clientId,
+      role: { $in: ['CLIENT', 'client'] }
+    }).lean();
+    
+    if (existingUser) {
+      actualId = existingUser._id;
+    }
+    
+    // If not found and ID looks like MongoDB ObjectId (24 hex chars), try converting
+    if (!existingUser && mongoose.Types.ObjectId.isValid(clientId) && clientId.length === 24) {
+      try {
+        const objectId = new mongoose.Types.ObjectId(clientId);
+        // Query using the native collection to handle ObjectId _id
+        const UserCollection = User.collection;
+        const doc = await UserCollection.findOne({
+          _id: objectId,
+          role: { $in: ['CLIENT', 'client'] }
+        });
+        if (doc) {
+          // Convert to plain object
+          existingUser = User.hydrate(doc).toObject();
+          actualId = objectId; // Use ObjectId for updates
+        }
+      } catch (err) {
+        console.log(`[UPDATE CLIENT] Could not convert to ObjectId: ${err.message}`);
+      }
+    }
+    
+    if (!existingUser) {
+      const allClients = await User.find({ role: { $in: ['CLIENT', 'client'] } })
+        .select('_id name email')
+        .limit(3)
+        .lean();
+      console.log(`[UPDATE CLIENT] Client not found. Sample client IDs:`, 
+        allClients.map(c => ({ id: String(c._id), type: typeof c._id, length: String(c._id).length, isObjectId: c._id instanceof mongoose.Types.ObjectId }))
+      );
+      
       return res.status(404).json({
         success: false,
         error: 'Client not found'
       });
     }
     
-    // Build update query for users table
-    const userUpdates = [];
-    const userValues = [];
-    let paramCount = 1;
+    // Determine the actual ID format for updates
+    if (!actualId) {
+      actualId = existingUser._id;
+    }
+    
+    // If _id is an ObjectId, use it directly; otherwise convert string to ObjectId if needed
+    if (actualId instanceof mongoose.Types.ObjectId) {
+      // Already an ObjectId, use as is
+    } else if (mongoose.Types.ObjectId.isValid(String(actualId)) && String(actualId).length === 24) {
+      // Convert string to ObjectId for update
+      actualId = new mongoose.Types.ObjectId(String(actualId));
+    }
+    
+    console.log(`[UPDATE CLIENT] Found client: ${existingUser.name} (${existingUser.email}), Current isActive: ${existingUser.isActive}`);
+    console.log(`[UPDATE CLIENT] Actual ID for update: ${actualId} (type: ${actualId.constructor.name})`);
+    
+    // Build update object
+    const updateData = {};
     
     if (name !== undefined) {
-      userUpdates.push(`name = $${paramCount}`);
-      userValues.push(name);
-      paramCount++;
+      updateData.name = name;
     }
     
     if (email !== undefined) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email)) {
-        await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           error: 'Invalid email format'
@@ -255,127 +481,155 @@ router.put('/:id', async (req, res) => {
       const normalizedEmail = email.trim().toLowerCase();
       
       // Check if email exists for another user
-      const emailCheck = await client.query(
-        'SELECT id FROM users WHERE LOWER(email) = $1 AND id != $2',
-        [normalizedEmail, id]
-      );
+      const emailCheck = await User.findOne({
+        email: normalizedEmail,
+        _id: { $ne: clientId }
+      });
       
-      if (emailCheck.rows.length > 0) {
-        await client.query('ROLLBACK');
+      if (emailCheck) {
         return res.status(409).json({
           success: false,
           error: 'Email already exists'
         });
       }
       
-      userUpdates.push(`email = $${paramCount}`);
-      userValues.push(normalizedEmail);
-      paramCount++;
+      updateData.email = normalizedEmail;
     }
     
     if (phone !== undefined) {
-      userUpdates.push(`phone = $${paramCount}`);
-      userValues.push(phone);
-      paramCount++;
+      updateData.phone = phone;
     }
     
     if (password !== undefined && password.trim() !== '') {
-      const saltRounds = 10;
-      const passwordHash = await bcrypt.hash(password, saltRounds);
-      userUpdates.push(`password_hash = $${paramCount}`);
-      userValues.push(passwordHash);
-      paramCount++;
+      updateData.password = password; // User model will hash it in pre-save hook
     }
     
     if (is_active !== undefined) {
-      userUpdates.push(`is_active = $${paramCount}`);
-      userValues.push(is_active);
-      paramCount++;
+      // Ensure isActive is a boolean - handle both true and false explicitly
+      // User model uses 'isActive' (camelCase), but API accepts 'is_active' (snake_case)
+      let isActiveBool;
+      if (typeof is_active === 'boolean') {
+        isActiveBool = is_active;
+      } else if (is_active === 'true' || is_active === 1 || is_active === '1') {
+        isActiveBool = true;
+      } else if (is_active === 'false' || is_active === 0 || is_active === '0' || is_active === false) {
+        isActiveBool = false;
+      } else {
+        isActiveBool = Boolean(is_active);
+      }
+      updateData.isActive = isActiveBool; // Use camelCase for User model
+      console.log(`[UPDATE CLIENT] Setting isActive to: ${isActiveBool} (boolean: ${typeof isActiveBool})`);
     }
     
-    // Update users table
-    if (userUpdates.length > 0) {
-      userUpdates.push(`updated_at = NOW()`);
-      userValues.push(id);
+    // Update client - use the actualId (ObjectId format) for updates
+    if (Object.keys(updateData).length > 0) {
+      console.log(`[UPDATE CLIENT] Update data:`, updateData);
       
-      const userQuery = `
-        UPDATE users
-        SET ${userUpdates.join(', ')}
-        WHERE id = $${paramCount}
-        RETURNING id, email, name, phone, is_active, created_at, updated_at
-      `;
-      
-      await client.query(userQuery, userValues);
+      try {
+        // Use the actualId (ObjectId) for the update query
+        const updateQuery = { _id: actualId };
+        console.log(`[UPDATE CLIENT] Update query:`, { _id: actualId, _idType: actualId.constructor.name });
+        
+        const updateResult = await User.updateOne(
+          updateQuery,
+          { $set: updateData }
+        );
+        
+        console.log(`[UPDATE CLIENT] Update result:`, {
+          matched: updateResult.matchedCount,
+          modified: updateResult.modifiedCount
+        });
+        
+        if (updateResult.matchedCount === 0) {
+          console.error(`[UPDATE CLIENT] No document matched for update`);
+          // Try using native collection update as fallback
+          try {
+            const UserCollection = User.collection;
+            const nativeUpdateResult = await UserCollection.updateOne(
+              { _id: actualId },
+              { $set: updateData }
+            );
+            console.log(`[UPDATE CLIENT] Native update result:`, {
+              matched: nativeUpdateResult.matchedCount,
+              modified: nativeUpdateResult.modifiedCount
+            });
+            if (nativeUpdateResult.matchedCount === 0) {
+              return res.status(404).json({
+                success: false,
+                error: 'Client not found after update'
+              });
+            }
+          } catch (nativeError) {
+            console.error(`[UPDATE CLIENT] Native update also failed:`, nativeError);
+            return res.status(404).json({
+              success: false,
+              error: 'Client not found after update'
+            });
+          }
+        }
+        
+        if (updateResult.modifiedCount === 0 && updateResult.matchedCount > 0) {
+          console.log(`[UPDATE CLIENT] Document matched but no changes made (might be same value)`);
+        }
+      } catch (updateError) {
+        console.error(`[UPDATE CLIENT] Update error:`, updateError);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to update client',
+          message: updateError.message
+        });
+      }
     }
     
-    // Update clients profile table
-    const clientUpdates = [];
-    const clientValues = [];
-    let clientParamCount = 1;
+    // Fetch updated client using the actualId
+    let updatedClient = await User.findById(actualId).lean();
     
-    if (companyName !== undefined) {
-      clientUpdates.push(`company_name = $${clientParamCount}`);
-      clientValues.push(companyName);
-      clientParamCount++;
+    // If not found, try with native collection
+    if (!updatedClient) {
+      try {
+        const UserCollection = User.collection;
+        const doc = await UserCollection.findOne({ _id: actualId });
+        if (doc) {
+          updatedClient = User.hydrate(doc).toObject();
+        }
+      } catch (err) {
+        console.error(`[UPDATE CLIENT] Error fetching updated client:`, err);
+      }
     }
     
-    if (contactPerson !== undefined) {
-      clientUpdates.push(`contact_person = $${clientParamCount}`);
-      clientValues.push(contactPerson);
-      clientParamCount++;
+    if (!updatedClient) {
+      return res.status(404).json({
+        success: false,
+        error: 'Client not found'
+      });
     }
     
-    if (address !== undefined) {
-      clientUpdates.push(`address = $${clientParamCount}`);
-      clientValues.push(address);
-      clientParamCount++;
-    }
+    // Ensure boolean response - explicitly convert to boolean
+    // User model uses 'isActive', but API returns 'is_active' for consistency
+    const isActiveResponse = updatedClient.isActive === true;
     
-    if (clientUpdates.length > 0) {
-      clientUpdates.push(`updated_by = $${clientParamCount}`);
-      clientValues.push(adminId);
-      clientParamCount++;
-      
-      clientUpdates.push(`updated_at = NOW()`);
-      
-      clientValues.push(id);
-      
-      const clientQuery = `
-        UPDATE clients
-        SET ${clientUpdates.join(', ')}
-        WHERE user_id = $${clientParamCount}
-      `;
-      
-      await client.query(clientQuery, clientValues);
-    }
-    
-    // Get updated client data
-    const result = await client.query(`
-      SELECT 
-        u.id, u.email, u.name, u.phone, u.is_active, u.created_at, u.updated_at,
-        c.company_name, c.contact_person, c.address
-      FROM users u
-      LEFT JOIN clients c ON c.user_id = u.id
-      WHERE u.id = $1
-    `, [id]);
-    
-    await client.query('COMMIT');
+    console.log(`[UPDATE CLIENT] Response is_active: ${isActiveResponse} (from DB isActive: ${updatedClient.isActive}, type: ${typeof updatedClient.isActive})`);
     
     res.json({
       success: true,
       message: 'Client updated successfully',
-      data: result.rows[0]
+      data: {
+        id: updatedClient._id.toString(),
+        email: updatedClient.email,
+        name: updatedClient.name,
+        phone: updatedClient.phone,
+        is_active: isActiveResponse,
+        created_at: updatedClient.createdAt,
+        updated_at: updatedClient.updatedAt
+      }
     });
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error('Error updating client:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update client',
       message: error.message
     });
-  } finally {
-    client.release();
   }
 });
 
@@ -383,46 +637,115 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const mongoose = require('mongoose');
     
-    // Check if user exists and is a client
-    const existingUser = await pool.query(
-      'SELECT id, name FROM users WHERE id = $1 AND role = \'client\'',
-      [id]
-    );
+    const User = require('../models/User');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
     
-    if (existingUser.rows.length === 0) {
+    if (!id || id.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid client ID format'
+      });
+    }
+    
+    const clientId = id.trim();
+    
+    // Check if user exists and is a client - handle both string UUIDs and MongoDB ObjectIds
+    let existingUser = await User.findOne({
+      _id: clientId,
+      role: { $in: ['CLIENT', 'client'] }
+    }).lean();
+    
+    // If not found and ID looks like MongoDB ObjectId (24 hex chars), try with ObjectId
+    if (!existingUser && mongoose.Types.ObjectId.isValid(clientId) && clientId.length === 24) {
+      try {
+        const objectId = new mongoose.Types.ObjectId(clientId);
+        // Query using the native collection to handle ObjectId _id
+        const UserCollection = User.collection;
+        const doc = await UserCollection.findOne({
+          _id: objectId,
+          role: { $in: ['CLIENT', 'client'] }
+        });
+        if (doc) {
+          // Convert to plain object
+          existingUser = User.hydrate(doc).toObject();
+        }
+      } catch (err) {
+        console.log(`[DELETE CLIENT] Could not convert to ObjectId: ${err.message}`);
+      }
+    }
+    
+    if (!existingUser) {
       return res.status(404).json({
         success: false,
         error: 'Client not found'
       });
     }
     
-    // Check for associated records
-    const checksQuery = `
-      SELECT 
-        (SELECT COUNT(*) FROM projects WHERE client_user_id = $1) as project_count,
-        (SELECT COUNT(*) FROM supervisors WHERE client_user_id = $1) as supervisor_count,
-        (SELECT COUNT(*) FROM employees WHERE client_user_id = $1) as staff_count
-    `;
+    // Use the actual _id from the found document for deletion
+    const actualId = existingUser._id;
     
-    const checks = await pool.query(checksQuery, [id]);
-    const counts = checks.rows[0];
+    // Convert actualId to string for queries
+    const clientIdString = String(actualId);
     
-    if (counts.project_count > 0 || counts.supervisor_count > 0 || counts.staff_count > 0) {
+    // Check for associated records - use 'client.client_id' (nested field) not 'client_user_id'
+    const projectCount = await ProjectMerged.countDocuments({
+      'client.client_id': clientIdString
+    });
+    
+    // Count supervisors assigned to client's projects
+    const projectIds = await ProjectMerged.distinct('_id', {
+      'client.client_id': clientIdString
+    });
+    const supervisorIds = await ProjectMerged.distinct('assigned_supervisors.supervisor_id', {
+      'client.client_id': clientIdString
+    });
+    const supervisorCount = await User.countDocuments({
+      _id: { $in: supervisorIds },
+      role: { $in: ['SUPERVISOR', 'supervisor'] }
+    });
+    
+    // Count staff assigned to client's projects
+    const staffCount = await EmployeeMerged.countDocuments({
+      $or: [
+        { client_user_id: clientIdString },
+        { 'project_assignments.project_id': { $in: projectIds.map(p => p.toString()) } }
+      ]
+    });
+    
+    if (projectCount > 0 || supervisorCount > 0 || staffCount > 0) {
       return res.status(400).json({
         success: false,
         error: 'Cannot delete client with associated records',
         details: {
-          projects: parseInt(counts.project_count),
-          supervisors: parseInt(counts.supervisor_count),
-          staff: parseInt(counts.staff_count)
+          projects: projectCount,
+          supervisors: supervisorCount,
+          staff: staffCount
         },
         message: 'Please remove or reassign all associated projects, supervisors, and staff before deleting this client.'
       });
     }
     
-    // Delete user (will cascade delete client profile)
-    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    // Delete user using the actual _id
+    const deleteResult = await User.findByIdAndDelete(actualId);
+    
+    // If that fails and _id is ObjectId, try native collection delete
+    if (!deleteResult && mongoose.Types.ObjectId.isValid(String(actualId)) && String(actualId).length === 24) {
+      try {
+        const objectId = new mongoose.Types.ObjectId(String(actualId));
+        const UserCollection = User.collection;
+        await UserCollection.deleteOne({ _id: objectId });
+      } catch (err) {
+        console.error('[DELETE CLIENT] Native delete failed:', err);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to delete client',
+          message: err.message
+        });
+      }
+    }
     
     res.json({
       success: true,
@@ -442,44 +765,108 @@ router.delete('/:id', async (req, res) => {
 router.get('/:id/stats', async (req, res) => {
   try {
     const { id } = req.params;
+    const mongoose = require('mongoose');
     
-    // Check if user exists and is a client
-    const clientCheck = await pool.query(
-      'SELECT id FROM users WHERE id = $1 AND role = $2',
-      [id, 'client']
-    );
+    const User = require('../models/User');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
     
-    if (clientCheck.rows.length === 0) {
+    if (!id || id.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid client ID format'
+      });
+    }
+    
+    const clientId = id.trim();
+    
+    // Check if user exists and is a client - handle both string UUIDs and MongoDB ObjectIds
+    let clientCheck = await User.findOne({
+      _id: clientId,
+      role: { $in: ['CLIENT', 'client'] }
+    }).lean();
+    
+    // If not found and ID looks like MongoDB ObjectId (24 hex chars), try with ObjectId
+    if (!clientCheck && mongoose.Types.ObjectId.isValid(clientId) && clientId.length === 24) {
+      try {
+        const objectId = new mongoose.Types.ObjectId(clientId);
+        // Query using the native collection to handle ObjectId _id
+        const UserCollection = User.collection;
+        const doc = await UserCollection.findOne({
+          _id: objectId,
+          role: { $in: ['CLIENT', 'client'] }
+        });
+        if (doc) {
+          // Convert to plain object
+          clientCheck = User.hydrate(doc).toObject();
+        }
+      } catch (err) {
+        console.log(`[GET CLIENT STATS] Could not convert to ObjectId: ${err.message}`);
+      }
+    }
+    
+    if (!clientCheck) {
       return res.status(404).json({
         success: false,
         error: 'Client not found'
       });
     }
     
-    // Get actual client statistics
-    const statsQuery = `
-      SELECT 
-        COALESCE((SELECT COUNT(*) FROM projects WHERE client_user_id = $1), 0) as total_projects,
-        COALESCE((SELECT COUNT(*) FROM projects WHERE client_user_id = $1 AND (end_date IS NULL OR end_date > NOW())), 0) as active_projects,
-        COALESCE((SELECT COUNT(*) FROM supervisors WHERE client_user_id = $1), 0) as total_supervisors,
-        COALESCE((SELECT COUNT(*) FROM employees WHERE client_user_id = $1), 0) as total_staff,
-        COALESCE((SELECT COUNT(*) FROM employees WHERE client_user_id = $1 AND project_id IS NOT NULL), 0) as assigned_staff
-    `;
+    // Get project statistics - use 'client.client_id' (nested field) not 'client_user_id'
+    const totalProjects = await ProjectMerged.countDocuments({
+      'client.client_id': clientId
+    });
     
-    const result = await pool.query(statsQuery, [id]);
+    const now = new Date();
+    const activeProjects = await ProjectMerged.countDocuments({
+      'client.client_id': clientId,
+      $or: [
+        { end_date: null },
+        { end_date: { $gt: now } }
+      ]
+    });
+    
+    // Get supervisor statistics (from projects' assigned_supervisors)
+    const supervisorIds = await ProjectMerged.distinct('assigned_supervisors.supervisor_id', {
+      'client.client_id': clientId
+    });
+    const totalSupervisors = await User.countDocuments({
+      _id: { $in: supervisorIds },
+      role: { $in: ['SUPERVISOR', 'supervisor'] }
+    });
+    
+    // Get staff statistics
+    const projectIds = await ProjectMerged.distinct('_id', {
+      'client.client_id': clientId
+    });
+    const projectIdStrings = projectIds.map(p => p.toString());
+    
+    const totalStaff = await EmployeeMerged.countDocuments({
+      $or: [
+        { client_user_id: clientId },
+        { 'project_assignments.project_id': { $in: projectIdStrings } }
+      ]
+    });
+    
+    const assignedStaff = await EmployeeMerged.countDocuments({
+      $or: [
+        { client_user_id: clientId, 'project_assignments.0': { $exists: true } },
+        { 'project_assignments.project_id': { $in: projectIdStrings } }
+      ]
+    });
     
     res.json({
       success: true,
       data: {
         projects: {
-          total: parseInt(result.rows[0].total_projects) || 0,
-          active: parseInt(result.rows[0].active_projects) || 0
+          total: totalProjects,
+          active: activeProjects
         },
-        supervisors: parseInt(result.rows[0].total_supervisors) || 0,
+        supervisors: totalSupervisors,
         staff: {
-          total: parseInt(result.rows[0].total_staff) || 0,
-          assigned: parseInt(result.rows[0].assigned_staff) || 0,
-          unassigned: (parseInt(result.rows[0].total_staff) || 0) - (parseInt(result.rows[0].assigned_staff) || 0)
+          total: totalStaff,
+          assigned: assignedStaff,
+          unassigned: totalStaff - assignedStaff
         }
       }
     });
@@ -494,4 +881,5 @@ router.get('/:id/stats', async (req, res) => {
 });
 
 module.exports = router;
+
 

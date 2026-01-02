@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const attendanceController = require('../controllers/attendanceController');
 const authMiddleware = require('../middleware/authMiddleware');
-const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
+const authorizeRoles = require('../middleware/authorizeRoles');
 
 const router = express.Router();
 
@@ -36,9 +36,12 @@ router.post(
   upload.single('image'),
   attendanceController.checkOut,
 );
+// Worker routes - view own attendance
 router.get('/me', authMiddleware, attendanceController.getMyAttendance);
-router.get('/admin/all', adminAuthMiddleware, attendanceController.getAllAttendance);
-router.get('/admin/last-end-dates', adminAuthMiddleware, attendanceController.getLastEndDates);
+
+// Admin/Supervisor routes - view all attendance
+router.get('/admin/all', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), attendanceController.getAllAttendance);
+router.get('/admin/last-end-dates', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), attendanceController.getLastEndDates);
 
 module.exports = router;
 

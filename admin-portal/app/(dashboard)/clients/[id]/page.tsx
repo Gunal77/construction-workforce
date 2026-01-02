@@ -22,7 +22,7 @@ import StatCard from '@/components/StatCard';
 type Client = any;
 type ClientStats = any;
 
-export default function ClientDetailPage({ params }: { params: { id: string } }) {
+export default function ClientDetailPage({ params }: { params: Promise<{ id: string }> | { id: string } }) {
   const router = useRouter();
   const [client, setClient] = useState<Client | null>(null);
   const [stats, setStats] = useState<ClientStats | null>(null);
@@ -30,21 +30,35 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
   const [showEditForm, setShowEditForm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
+  const [clientId, setClientId] = useState<string | null>(null);
+
+  // Handle params (can be Promise in Next.js 15+)
+  useEffect(() => {
+    const resolveParams = async () => {
+      const resolvedParams = params instanceof Promise ? await params : params;
+      setClientId(resolvedParams.id);
+    };
+    resolveParams();
+  }, [params]);
 
   useEffect(() => {
-    fetchClientData();
-  }, [params.id]);
+    if (clientId) {
+      fetchClientData();
+    }
+  }, [clientId]);
 
   const fetchClientData = async () => {
+    if (!clientId) return;
+    
     try {
       setLoading(true);
       
       // Use backend API instead of Supabase directly
       const [clientResponse, statsResponse] = await Promise.all([
-        fetch(`/api/proxy/clients/${params.id}`, {
+        fetch(`/api/proxy/clients/${clientId}`, {
           credentials: 'include',
         }).then(res => res.json()),
-        fetch(`/api/proxy/clients/${params.id}/stats`, {
+        fetch(`/api/proxy/clients/${clientId}/stats`, {
           credentials: 'include',
         }).then(res => res.json()),
       ]);
@@ -52,40 +66,41 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
       console.log('Client Response:', clientResponse);
       console.log('Stats Response:', statsResponse);
       
-      if (clientResponse.success && statsResponse.success) {
+      // Client data is required, stats is optional
+      if (clientResponse.success) {
         console.log('✅ Client Response Success');
         console.log('Projects count:', clientResponse.data?.projects?.length);
         console.log('Supervisors count:', clientResponse.data?.supervisors?.length);
         console.log('Staff count:', clientResponse.data?.staff?.length);
         
         // Verify all projects belong to this client
-        if (clientResponse.data?.projects) {
+        if (clientResponse.data?.projects && clientId) {
           const allBelongToClient = clientResponse.data.projects.every((p: any) => 
-            p.client_user_id === params.id || !p.client_user_id
+            p.client_user_id === clientId || !p.client_user_id
           );
           console.log('✅ All projects belong to this client:', allBelongToClient);
           if (!allBelongToClient) {
             console.error('❌ ERROR: Some projects do not belong to this client!');
             clientResponse.data.projects.forEach((p: any) => {
-              if (p.client_user_id !== params.id) {
-                console.error('   Project', p.name, 'has client_user_id:', p.client_user_id, 'but expected:', params.id);
+              if (p.client_user_id !== clientId) {
+                console.error('   Project', p.name, 'has client_user_id:', p.client_user_id, 'but expected:', clientId);
               }
             });
           }
         }
         
         // Verify all supervisors belong to this client
-        if (clientResponse.data?.supervisors) {
+        if (clientResponse.data?.supervisors && clientId) {
           const allBelongToClient = clientResponse.data.supervisors.every((s: any) => 
-            s.client_user_id === params.id || !s.client_user_id
+            s.client_user_id === clientId || !s.client_user_id
           );
           console.log('✅ All supervisors belong to this client:', allBelongToClient);
         }
         
         // Verify all staff belong to this client
-        if (clientResponse.data?.staff) {
+        if (clientResponse.data?.staff && clientId) {
           const allBelongToClient = clientResponse.data.staff.every((e: any) => 
-            e.client_user_id === params.id || !e.client_user_id
+            e.client_user_id === clientId || !e.client_user_id
           );
           console.log('✅ All staff belong to this client:', allBelongToClient);
         }
@@ -97,10 +112,22 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
           supervisors: clientResponse.data?.supervisors || [],
           staff: clientResponse.data?.staff || [],
         });
-        setStats(statsResponse.data);
+        
+        // Stats is optional - only set if successful
+        if (statsResponse.success) {
+          setStats(statsResponse.data);
+        } else {
+          console.warn('Stats fetch failed, but continuing with client data:', statsResponse.error);
+          // Set default stats if fetch failed
+          setStats({
+            projects: { total: clientResponse.data?.projects?.length || 0, active: 0 },
+            supervisors: 0,
+            staff: { total: clientResponse.data?.staff?.length || 0, assigned: 0, unassigned: 0 }
+          });
+        }
       } else {
-        console.error('Failed to fetch client data:', clientResponse, statsResponse);
-        alert(clientResponse.error || statsResponse.error || 'Failed to fetch client data');
+        console.error('Failed to fetch client data:', clientResponse);
+        alert(clientResponse.error || 'Failed to fetch client data');
         router.push('/clients');
       }
     } catch (error: any) {
@@ -113,9 +140,11 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
   };
 
   const handleUpdate = async (data: any) => {
+    if (!clientId) return;
+    
     try {
       setIsSubmitting(true);
-      const result = await updateClientAction(params.id, data);
+      const result = await updateClientAction(clientId, data);
       
       if (result.success) {
         alert(result.message || 'Client updated successfully');
@@ -133,12 +162,14 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
   };
 
   const handleDelete = async () => {
+    if (!clientId) return;
+    
     if (!confirm('Are you sure you want to delete this client? This action cannot be undone.')) {
       return;
     }
 
     try {
-      const result = await deleteClientAction(params.id);
+      const result = await deleteClientAction(clientId);
       
       if (result.success) {
         alert(result.message || 'Client deleted successfully');
@@ -153,9 +184,11 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
   };
 
   const handleToggleStatus = async () => {
-    if (!client) return;
+    if (!client || !clientId) return;
     
-    const newStatus = !client.is_active;
+    // Ensure we're working with a proper boolean
+    const currentStatus = client.is_active === true;
+    const newStatus = !currentStatus;
     const statusText = newStatus ? 'active' : 'inactive';
     
     if (!confirm(`Are you sure you want to make this client ${statusText}?`)) {
@@ -164,12 +197,15 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
 
     try {
       setIsTogglingStatus(true);
-      const result = await updateClientAction(params.id, { is_active: newStatus });
+      console.log(`[TOGGLE] Current: ${currentStatus}, New: ${newStatus}`);
+      const result = await updateClientAction(clientId, { is_active: newStatus });
       
       if (result.success) {
+        console.log(`[TOGGLE] Success! Updated client status to: ${result.data?.is_active}`);
         alert(`Client is now ${statusText}`);
         fetchClientData(); // Refresh data
       } else {
+        console.error(`[TOGGLE] Failed:`, result.error);
         alert(result.error || 'Failed to update client status');
       }
     } catch (error: any) {
@@ -222,7 +258,7 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold text-gray-900">{client.name}</h1>
-              {client.is_active !== false ? (
+              {client.is_active === true ? (
                 <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
                   Active
                 </span>
@@ -297,7 +333,7 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
               <p className="text-sm text-gray-500">Status</p>
               <div className="flex items-center gap-3 mt-1">
                 <p className="text-sm font-medium">
-                  {client.is_active !== false ? (
+                  {client.is_active === true ? (
                     <span className="text-green-600">Active</span>
                   ) : (
                     <span className="text-red-600">Inactive</span>
@@ -308,13 +344,13 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
                   onClick={handleToggleStatus}
                   disabled={isTogglingStatus}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
-                    client.is_active !== false ? 'bg-green-500' : 'bg-gray-300'
+                    client.is_active === true ? 'bg-green-500' : 'bg-gray-300'
                   } ${isTogglingStatus ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                  title={`Click to make client ${client.is_active !== false ? 'inactive' : 'active'}`}
+                  title={`Click to make client ${client.is_active === true ? 'inactive' : 'active'}`}
                 >
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      client.is_active !== false ? 'translate-x-6' : 'translate-x-1'
+                      client.is_active === true ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
@@ -367,7 +403,7 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
         {client.projects && client.projects.length > 0 ? (
           <div className="space-y-3">
             {client.projects
-              .filter((project: any) => !project.client_user_id || project.client_user_id === params.id)
+              .filter((project: any) => !project.client_user_id || project.client_user_id === clientId)
               .map((project: any) => (
               <div
                 key={project.id}
@@ -406,7 +442,7 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
         {client.supervisors && client.supervisors.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {client.supervisors
-              .filter((supervisor: any) => !supervisor.client_user_id || supervisor.client_user_id === params.id)
+              .filter((supervisor: any) => !supervisor.client_user_id || supervisor.client_user_id === clientId)
               .map((supervisor: any) => (
               <div
                 key={supervisor.id}
@@ -435,7 +471,7 @@ export default function ClientDetailPage({ params }: { params: { id: string } })
         {client.staff && client.staff.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {client.staff
-              .filter((staff: any) => !staff.client_user_id || staff.client_user_id === params.id)
+              .filter((staff: any) => !staff.client_user_id || staff.client_user_id === clientId)
               .map((staff: any) => (
               <div
                 key={staff.id}

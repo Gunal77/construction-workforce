@@ -57,18 +57,28 @@ export default function MonthlySummaryDetailPage() {
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
 
+  // Get summary ID from params
+  const summaryId = params?.id as string;
+
   useEffect(() => {
-    if (params.id) {
+    if (summaryId) {
       fetchSummary();
     }
-  }, [params.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryId]);
 
   const fetchSummary = async () => {
+    if (!summaryId) {
+      setError('Summary ID is missing');
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setError('');
 
-      const response = await fetch(`/api/proxy/monthly-summaries/${params.id}`, {
+      const response = await fetch(`/api/proxy/monthly-summaries/${summaryId}`, {
         credentials: 'include',
       });
 
@@ -98,7 +108,7 @@ export default function MonthlySummaryDetailPage() {
       setIsApproving(true);
       setError('');
 
-      const response = await fetch(`/api/proxy/monthly-summaries/${params.id}/approve`, {
+      const response = await fetch(`/api/proxy/monthly-summaries/${summaryId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -137,7 +147,7 @@ export default function MonthlySummaryDetailPage() {
       setIsApproving(true);
       setError('');
 
-      const response = await fetch(`/api/proxy/monthly-summaries/${params.id}/reject`, {
+      const response = await fetch(`/api/proxy/monthly-summaries/${summaryId}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

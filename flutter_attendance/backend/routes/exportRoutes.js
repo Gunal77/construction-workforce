@@ -1,20 +1,27 @@
 const express = require('express');
 const exportController = require('../controllers/exportController');
-const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
 const authMiddleware = require('../middleware/authMiddleware');
-const db = require('../config/db');
+const authorizeRoles = require('../middleware/authorizeRoles');
+const employeeRepository = require('../repositories/employeeRepository');
 
-// Staff middleware (reused from monthlySummaryRoutes)
+// Staff middleware - ensures user is a WORKER and has employee record
 const staffMiddleware = async (req, res, next) => {
-  if (!req.user?.id || !req.user?.email) {
-    return res.status(403).json({ message: 'Employee privileges required: User ID or email missing from token.' });
+  if (!req.user) {
+    return res.status(401).json({ message: 'Authentication required' });
   }
+
+  if (req.user.role !== 'WORKER') {
+    return res.status(403).json({ message: 'Worker privileges required' });
+  }
+
   try {
-    const { rows } = await db.query('SELECT id FROM employees WHERE email = $1', [req.user.email]);
-    if (rows.length === 0) {
-      return res.status(403).json({ message: 'Employee privileges required: User not found in employees table.' });
+    const employee = await employeeRepository.findByEmail(req.user.email);
+    
+    if (!employee) {
+      return res.status(403).json({ message: 'Employee record not found. Please contact administrator.' });
     }
-    req.employeeId = rows[0].id;
+    
+    req.employeeId = employee.id;
     next();
   } catch (error) {
     console.error('Error in staffMiddleware:', error);
@@ -26,51 +33,72 @@ const router = express.Router();
 
 // Monthly Summary Exports
 // PDF: Available for both admin and staff (for approved summaries)
-// Use adminAuthMiddleware for admin access, fallback to authMiddleware for staff
 router.get(
   '/monthly-summaries/:id/pdf',
-  adminAuthMiddleware, // Changed to adminAuthMiddleware for admin portal
+  authMiddleware,
+  authorizeRoles('ADMIN', 'SUPERVISOR', 'WORKER'),
   exportController.exportMonthlySummaryPDF
 );
 router.get(
   '/monthly-summaries/:id/excel',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN', 'SUPERVISOR'),
   exportController.exportMonthlySummaryExcel
 );
 
-// Attendance Report Exports
+// Bulk Monthly Summary Exports (all summaries)
+router.post(
+  '/monthly-summaries/bulk/pdf',
+  authMiddleware,
+  authorizeRoles('ADMIN', 'SUPERVISOR'),
+  exportController.exportBulkMonthlySummariesPDF
+);
+router.post(
+  '/monthly-summaries/bulk/excel',
+  authMiddleware,
+  authorizeRoles('ADMIN', 'SUPERVISOR'),
+  exportController.exportBulkMonthlySummariesExcel
+);
+
+// Attendance Report Exports - ADMIN only
 router.get(
   '/attendance/pdf',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN'),
   exportController.exportAttendanceReportPDF
 );
 router.get(
   '/attendance/excel',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN'),
   exportController.exportAttendanceReportExcel
 );
 
-// Leave Report Exports
+// Leave Report Exports - ADMIN only
 router.get(
   '/leave/pdf',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN'),
   exportController.exportLeaveReportPDF
 );
 router.get(
   '/leave/excel',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN'),
   exportController.exportLeaveReportExcel
 );
 
-// Timesheet Report Exports
+// Timesheet Report Exports - ADMIN only
 router.get(
   '/timesheet/pdf',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN'),
   exportController.exportTimesheetReportPDF
 );
 router.get(
   '/timesheet/excel',
-  adminAuthMiddleware,
+  authMiddleware,
+  authorizeRoles('ADMIN'),
   exportController.exportTimesheetReportExcel
 );
 

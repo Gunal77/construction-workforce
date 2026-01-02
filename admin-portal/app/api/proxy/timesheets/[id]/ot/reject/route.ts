@@ -10,7 +10,7 @@ async function getAuthToken() {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
     const token = await getAuthToken();
@@ -18,9 +18,10 @@ export async function POST(
       return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
 
+    const resolvedParams = params instanceof Promise ? await params : params;
     const body = await request.json();
 
-    const response = await fetch(`${API_BASE_URL}/api/timesheets/${params.id}/ot/reject`, {
+    const response = await fetch(`${API_BASE_URL}/api/timesheets/${resolvedParams.id}/ot/reject`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,

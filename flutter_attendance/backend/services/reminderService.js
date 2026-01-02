@@ -1,5 +1,9 @@
-const db = require('../config/db');
 const emailService = require('./emailService');
+const EmployeeMerged = require('../models/EmployeeMerged');
+const AttendanceMerged = require('../models/AttendanceMerged');
+const MonthlySummary = require('../models/MonthlySummary');
+const { LeaveRequest } = require('../models/LeaveMerged');
+const User = require('../models/User');
 
 /**
  * Send daily check-in reminder to staff who haven't checked in
@@ -11,24 +15,21 @@ const sendCheckInReminders = async () => {
     const todayStr = today.toISOString().split('T')[0];
 
     // Find employees who haven't checked in today
-    const query = `
-      SELECT DISTINCT
-        e.id,
-        e.name,
-        e.email,
-        e.status
-      FROM employees e
-      WHERE e.status = 'active'
-        AND e.email IS NOT NULL
-        AND e.id NOT IN (
-          SELECT DISTINCT employee_id
-          FROM attendance_logs
-          WHERE DATE(check_in_time) = $1
-            AND check_in_time IS NOT NULL
-        )
-    `;
+    // Get all employees who checked in today
+    const checkedInEmployees = await AttendanceMerged.find({
+      check_in_time: {
+        $gte: new Date(todayStr),
+        $lt: new Date(new Date(todayStr).getTime() + 24 * 60 * 60 * 1000)
+      },
+      check_in_time: { $ne: null }
+    }).distinct('employee_id').lean();
 
-    const { rows: employees } = await db.query(query, [todayStr]);
+    // Get all active employees who haven't checked in
+    const employees = await EmployeeMerged.find({
+      status: 'active',
+      email: { $ne: null, $exists: true },
+      _id: { $nin: checkedInEmployees }
+    }).select('_id name email status').lean();
 
     console.log(`📅 Check-in reminders: Found ${employees.length} employees who haven't checked in today`);
 
@@ -79,22 +80,37 @@ const sendCheckOutReminders = async () => {
     }
 
     // Find employees who checked in today but haven't checked out
-    const query = `
-      SELECT DISTINCT
-        e.id,
-        e.name,
-        e.email,
-        al.check_in_time
-      FROM employees e
-      INNER JOIN attendance_logs al ON al.employee_id = e.id
-      WHERE e.status = 'active'
-        AND e.email IS NOT NULL
-        AND DATE(al.check_in_time) = $1
-        AND al.check_out_time IS NULL
-        AND al.check_in_time IS NOT NULL
-    `;
+    const startOfDay = new Date(todayStr);
+    const endOfDay = new Date(new Date(todayStr).getTime() + 24 * 60 * 60 * 1000);
+    
+    const attendanceRecords = await AttendanceMerged.find({
+      check_in_time: { $gte: startOfDay, $lt: endOfDay },
+      check_out_time: null,
+      check_in_time: { $ne: null }
+    }).select('employee_id check_in_time').lean();
 
-    const { rows: employees } = await db.query(query, [todayStr]);
+    const employeeIds = [...new Set(attendanceRecords.map(a => a.employee_id?.toString()))];
+    
+    const employees = await EmployeeMerged.find({
+      _id: { $in: employeeIds },
+      status: 'active',
+      email: { $ne: null, $exists: true }
+    }).select('_id name email').lean();
+
+    // Enrich with check_in_time
+    const attendanceMap = new Map();
+    attendanceRecords.forEach(a => {
+      if (a.employee_id) {
+        attendanceMap.set(a.employee_id.toString(), a.check_in_time);
+      }
+    });
+
+    const enrichedEmployees = employees.map(emp => ({
+      id: emp._id,
+      name: emp.name,
+      email: emp.email,
+      check_in_time: attendanceMap.get(emp._id.toString())
+    }));
 
     console.log(`📅 Check-out reminders: Found ${employees.length} employees who haven't checked out today`);
 
@@ -139,29 +155,50 @@ const sendMonthlySummaryReminders = async () => {
     const currentYear = now.getFullYear();
 
     // Find employees with DRAFT monthly summaries for current or previous month
-    const query = `
-      SELECT DISTINCT
-        ms.id,
-        ms.month,
-        ms.year,
-        ms.status,
-        e.id as employee_id,
-        e.name,
-        e.email,
-        e.status as employee_status
-      FROM monthly_summaries ms
-      INNER JOIN employees e ON e.id = ms.employee_id
-      WHERE ms.status = 'DRAFT'
-        AND e.status = 'active'
-        AND e.email IS NOT NULL
-        AND (
-          (ms.year = $1 AND ms.month = $2) OR
-          (ms.year = $1 AND ms.month = $2 - 1) OR
-          (ms.year = $1 - 1 AND ms.month = 12 AND $2 = 1)
-        )
-    `;
+    const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1;
+    const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear;
 
-    const { rows: summaries } = await db.query(query, [currentYear, currentMonth]);
+    const summaries = await MonthlySummary.aggregate([
+      {
+        $match: {
+          status: 'DRAFT',
+          $or: [
+            { year: currentYear, month: currentMonth },
+            { year: currentYear, month: prevMonth },
+            { year: prevYear, month: 12, ...(currentMonth === 1 ? {} : {}) }
+          ]
+        }
+      },
+      {
+        $lookup: {
+          from: 'employees',
+          localField: 'employee_id',
+          foreignField: '_id',
+          as: 'employee'
+        }
+      },
+      {
+        $unwind: '$employee'
+      },
+      {
+        $match: {
+          'employee.status': 'active',
+          'employee.email': { $ne: null, $exists: true }
+        }
+      },
+      {
+        $project: {
+          id: '$_id',
+          month: 1,
+          year: 1,
+          status: 1,
+          employee_id: '$employee._id',
+          name: '$employee.name',
+          email: '$employee.email',
+          employee_status: '$employee.status'
+        }
+      }
+    ]);
 
     console.log(`📅 Monthly summary reminders: Found ${summaries.length} DRAFT summaries`);
 
@@ -205,22 +242,14 @@ const sendMonthlySummaryReminders = async () => {
 const sendAdminApprovalReminders = async () => {
   try {
     // Get pending monthly summaries
-    const monthlySummaryQuery = `
-      SELECT COUNT(*) as count
-      FROM monthly_summaries
-      WHERE status = 'SIGNED_BY_STAFF'
-    `;
-    const { rows: monthlyRows } = await db.query(monthlySummaryQuery);
-    const pendingMonthlySummaries = parseInt(monthlyRows[0].count) || 0;
+    const pendingMonthlySummaries = await MonthlySummary.countDocuments({
+      status: 'SIGNED_BY_STAFF'
+    });
 
     // Get pending leave requests
-    const leaveRequestQuery = `
-      SELECT COUNT(*) as count
-      FROM leave_requests
-      WHERE status = 'pending'
-    `;
-    const { rows: leaveRows } = await db.query(leaveRequestQuery);
-    const pendingLeaveRequests = parseInt(leaveRows[0].count) || 0;
+    const pendingLeaveRequests = await LeaveRequest.countDocuments({
+      status: 'pending'
+    });
 
     // Only send if there are pending items
     if (pendingMonthlySummaries === 0 && pendingLeaveRequests === 0) {
@@ -229,9 +258,10 @@ const sendAdminApprovalReminders = async () => {
     }
 
     // Get all active admins
-    const { rows: admins } = await db.query(
-      "SELECT email, name FROM admins WHERE status = 'active' OR status IS NULL"
-    );
+    const admins = await User.find({
+      role: 'ADMIN',
+      isActive: { $ne: false }
+    }).select('email name').lean();
 
     console.log(`📅 Admin approval reminders: ${pendingMonthlySummaries} monthly summaries, ${pendingLeaveRequests} leave requests pending`);
 

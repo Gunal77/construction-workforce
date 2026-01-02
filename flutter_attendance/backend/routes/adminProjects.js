@@ -1,106 +1,36 @@
 const express = require('express');
-const { supabase } = require('../config/supabaseClient');
-const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
+const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/authorizeRoles');
+const projectRepository = require('../repositories/projectRepository');
+const Project = require('../models/ProjectMerged');
+const User = require('../models/User');
 
 const router = express.Router();
 
-// All routes require admin authentication
-router.use(adminAuthMiddleware);
+// All routes require authentication and ADMIN role
+router.use(authMiddleware);
+router.use(authorizeRoles('ADMIN'));
 
 // GET /admin/projects - Fetch all projects with enriched data
 router.get('/', async (req, res) => {
   try {
-    // Get all projects
-    const { data: projects, error: projectsError } = await supabase
-      .from('projects')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (projectsError) {
-      return res.status(500).json({ message: projectsError.message || 'Failed to fetch projects' });
-    }
-
-    if (!projects || projects.length === 0) {
-      return res.json({ projects: [] });
-    }
-
-    // Optimize: Batch fetch all related data in parallel instead of per-project (much faster!)
-    const projectIds = projects.map(p => p.id);
-    const clientUserIds = [...new Set(projects.map(p => p.client_user_id).filter(Boolean))];
-
-    // Fetch all related data in parallel
-    const [clientUsersRes, supervisorRelationsRes, supervisorsRes, staffCountsRes] = await Promise.all([
-      // Fetch all client names in one query
-      clientUserIds.length > 0 ? supabase
-        .from('users')
-        .select('id, name')
-        .in('id', clientUserIds) : Promise.resolve({ data: [] }),
-      // Fetch all supervisor relations in one query
-      supabase
-        .from('supervisor_projects_relation')
-        .select('project_id, supervisor_id')
-        .in('project_id', projectIds),
-      // Fetch all supervisors (we'll get IDs from relations first)
-      Promise.resolve({ data: [] }), // Will be populated after we get supervisor IDs
-      // Fetch all staff counts in parallel
-      Promise.all(projectIds.map(projectId =>
-        supabase
-          .from('employees')
-          .select('*', { count: 'exact', head: true })
-          .eq('project_id', projectId)
-      )),
-    ]);
-
-    const clientUsers = clientUsersRes.data || [];
-    const supervisorRelations = supervisorRelationsRes.data || [];
-    const staffCounts = staffCountsRes;
-
-    // Build maps for fast lookup
-    const clientMap = new Map(clientUsers.map(c => [c.id, c.name]));
-    const supervisorMap = new Map();
-    supervisorRelations.forEach(rel => {
-      if (!supervisorMap.has(rel.project_id)) {
-        supervisorMap.set(rel.project_id, rel.supervisor_id);
-      }
-    });
-
-    // Fetch supervisors in batch
-    const supervisorIds = [...new Set(supervisorMap.values())];
-    const supervisorsData = supervisorIds.length > 0 ? await supabase
-      .from('supervisors')
-      .select('id, name, user_id')
-      .in('id', supervisorIds) : { data: [] };
-
-    const supervisorNameMap = new Map();
-    const supervisorUserIdMap = new Map();
-    (supervisorsData.data || []).forEach(s => {
-      supervisorNameMap.set(s.id, s.name);
-      supervisorUserIdMap.set(s.id, s.user_id);
-    });
-
-    // Build staff count map
-    const staffCountMap = new Map();
-    projectIds.forEach((projectId, index) => {
-      staffCountMap.set(projectId, staffCounts[index].count || 0);
-    });
-
-    // Enrich projects with batched data (no async operations needed now)
+    // MongoDB: Use repository to get projects
+    const projects = await projectRepository.findAll({ orderBy: 'created_at desc' });
+    
+    // Enrich with client names and staff counts from embedded data
     const enrichedProjects = projects.map((project) => {
-      const clientName = project.client_user_id ? clientMap.get(project.client_user_id) || null : null;
-      const staffCount = staffCountMap.get(project.id) || 0;
-      const supervisorId = supervisorMap.get(project.id);
-      const supervisorName = supervisorId ? supervisorNameMap.get(supervisorId) || null : null;
-      const supervisorUserId = supervisorId ? supervisorUserIdMap.get(supervisorId) || null : null;
-
+      const clientName = project.client?.client_name || null;
+      const staffCount = project.assigned_employees?.length || 0;
+      const supervisorCount = project.assigned_supervisors?.length || 0;
+      
       return {
         ...project,
         client_name: clientName,
         staff_count: staffCount,
-        supervisor_name: supervisorName,
-        supervisor_id: supervisorUserId || null,
+        supervisor_count: supervisorCount,
       };
     });
-
+    
     return res.json({ projects: enrichedProjects });
   } catch (err) {
     console.error('Get projects error', err);
@@ -117,87 +47,61 @@ router.get('/:id', async (req, res) => {
       return res.status(400).json({ message: 'Project ID is required' });
     }
 
-    // Get project
-    const { data: project, error: projectError } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (projectError) {
-      return res.status(500).json({ message: projectError.message || 'Failed to fetch project' });
-    }
+    // MongoDB implementation
+    const project = await projectRepository.findById(id);
 
     if (!project) {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    // Get assigned supervisors
-    // First, get the relation records
-    const { data: supervisorRelations, error: relationsError } = await supabase
-      .from('supervisor_projects_relation')
-      .select('supervisor_id, assigned_at')
-      .eq('project_id', id);
-
-    if (relationsError) {
-      console.error('Error fetching supervisor relations:', relationsError);
-      return res.json({ 
-        project,
-        supervisors: []
-      });
-    }
-
-    // If no relations, return empty supervisors array
-    if (!supervisorRelations || supervisorRelations.length === 0) {
-      return res.json({ 
+    // Get supervisors from embedded assigned_supervisors array
+    const supervisorAssignments = project.assigned_supervisors || [];
+    
+    if (supervisorAssignments.length === 0) {
+      return res.json({
         project: {
           ...project,
-          supervisor_id: null // Ensure supervisor_id is always present
+          supervisor_id: null,
         },
-        supervisors: []
+        supervisors: [],
       });
     }
 
-    // Get supervisor IDs
-    const supervisorIds = supervisorRelations.map(rel => rel.supervisor_id);
+    // Fetch supervisor user details
+    const supervisorIds = supervisorAssignments.map(assignment => assignment.supervisor_id);
+    const supervisors = await User.find({ 
+      _id: { $in: supervisorIds },
+      role: 'SUPERVISOR'
+    })
+      .select('_id name email phone')
+      .lean();
 
-    // Fetch supervisor details (include user_id to match frontend expectations)
-    const { data: supervisorsData, error: supervisorsError } = await supabase
-      .from('supervisors')
-      .select('id, name, email, phone, user_id')
-      .in('id', supervisorIds);
-
-    if (supervisorsError) {
-      console.error('Error fetching supervisors:', supervisorsError);
-      return res.json({ 
-        project: {
-          ...project,
-          supervisor_id: null
-        },
-        supervisors: []
-      });
-    }
-
-    // Combine supervisor data with assigned_at from relations
-    const supervisors = (supervisorsData || []).map(supervisor => {
-      const relation = supervisorRelations.find(rel => rel.supervisor_id === supervisor.id);
+    // Combine supervisor data with assigned_at from embedded data
+    const supervisorsWithAssignment = supervisors.map(supervisor => {
+      const supervisorId = supervisor._id || supervisor.id;
+      const assignment = supervisorAssignments.find(
+        a => a.supervisor_id === supervisorId
+      );
       return {
-        ...supervisor,
-        assignedAt: relation?.assigned_at || null,
+        id: supervisorId,
+        name: supervisor.name,
+        email: supervisor.email,
+        phone: supervisor.phone || null,
+        user_id: supervisorId,
+        assignedAt: assignment?.assigned_at || null,
       };
     });
 
-    // Get the first supervisor's user_id (since only one supervisor per project)
-    // This is what the frontend expects as supervisor_id
-    const firstSupervisor = supervisors.length > 0 ? supervisors[0] : null;
+    // Get the first supervisor's user_id (what frontend expects as supervisor_id)
+    const firstSupervisor = supervisorsWithAssignment.length > 0 ? supervisorsWithAssignment[0] : null;
     const supervisorUserId = firstSupervisor?.user_id || null;
 
-    return res.json({ 
+    return res.json({
       project: {
         ...project,
-        supervisor_id: supervisorUserId // Add supervisor_id to project object for frontend
+        supervisor_id: supervisorUserId,
       },
-      supervisors: supervisors || []
+      supervisors: supervisorsWithAssignment,
     });
   } catch (err) {
     console.error('Get project error', err);
@@ -220,38 +124,35 @@ router.post('/', async (req, res) => {
     }
 
     // Verify client exists
-    const { data: clientUser, error: clientError } = await supabase
-      .from('users')
-      .select('id, role')
-      .eq('id', client_user_id)
-      .eq('role', 'client')
-      .maybeSingle();
+    const clientUser = await User.findById(client_user_id)
+      .select('_id role name email')
+      .lean();
 
-    if (clientError || !clientUser) {
+    if (!clientUser || clientUser.role !== 'CLIENT') {
       return res.status(400).json({ message: 'Invalid client. Client not found or is not a valid client user.' });
     }
 
+    // Prepare project data with embedded client info
+    const mongoose = require('mongoose');
     const projectData = {
       name: name.trim(),
       location: location?.trim() || null,
       start_date: start_date || null,
       end_date: end_date || null,
       description: description?.trim() || null,
-      budget: budget != null ? (typeof budget === 'string' ? parseFloat(budget) : budget) : null,
-      client_user_id: client_user_id,
+      budget: budget != null ? mongoose.Types.Decimal128.fromString(budget.toString()) : null,
+      client: {
+        client_id: client_user_id,
+        client_name: clientUser.name || null,
+        client_email: clientUser.email || null,
+      },
+      assigned_employees: [],
+      assigned_supervisors: [],
     };
 
-    const { data, error } = await supabase
-      .from('projects')
-      .insert([projectData])
-      .select()
-      .single();
+    const project = await projectRepository.create(projectData);
 
-    if (error) {
-      return res.status(400).json({ message: error.message || 'Failed to create project' });
-    }
-
-    return res.status(201).json({ project: data, message: 'Project created successfully' });
+    return res.status(201).json({ project, message: 'Project created successfully' });
   } catch (err) {
     console.error('Create project error', err);
     return res.status(500).json({ message: 'Error creating project' });
@@ -288,10 +189,28 @@ router.put('/:id', async (req, res) => {
       updateData.description = description?.trim() || null;
     }
     if (budget !== undefined) {
-      updateData.budget = budget != null ? (typeof budget === 'string' ? parseFloat(budget) : budget) : null;
+      const mongoose = require('mongoose');
+      updateData.budget = budget != null ? mongoose.Types.Decimal128.fromString(budget.toString()) : null;
     }
     if (client_user_id !== undefined) {
-      updateData.client_user_id = client_user_id || null;
+      // Update client info if client_user_id is provided
+      if (client_user_id) {
+        const clientUser = await User.findById(client_user_id)
+          .select('_id role name email')
+          .lean();
+        
+        if (!clientUser || clientUser.role !== 'CLIENT') {
+          return res.status(400).json({ message: 'Invalid client. Client not found or is not a valid client user.' });
+        }
+        
+        updateData.client = {
+          client_id: client_user_id,
+          client_name: clientUser.name || null,
+          client_email: clientUser.email || null,
+        };
+      } else {
+        updateData.client = null;
+      }
     }
     if (req.body.status !== undefined) {
       updateData.status = req.body.status || null;
@@ -301,25 +220,13 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ message: 'No fields to update' });
     }
 
-    const { data, error } = await supabase
-      .from('projects')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
+    const project = await projectRepository.update(id, updateData);
 
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({ message: 'Project not found' });
-      }
-      return res.status(400).json({ message: error.message || 'Failed to update project' });
-    }
-
-    if (!data) {
+    if (!project) {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    return res.json({ project: data, message: 'Project updated successfully' });
+    return res.json({ project, message: 'Project updated successfully' });
   } catch (err) {
     console.error('Update project error', err);
     return res.status(500).json({ message: 'Error updating project' });
@@ -335,13 +242,10 @@ router.delete('/:id', async (req, res) => {
       return res.status(400).json({ message: 'Project ID is required' });
     }
 
-    const { error } = await supabase
-      .from('projects')
-      .delete()
-      .eq('id', id);
+    const deleted = await projectRepository.delete(id);
 
-    if (error) {
-      return res.status(400).json({ message: error.message || 'Failed to delete project' });
+    if (!deleted) {
+      return res.status(404).json({ message: 'Project not found' });
     }
 
     return res.json({ message: 'Project deleted successfully' });
@@ -361,80 +265,59 @@ router.post('/:id/assign-supervisor', async (req, res) => {
       return res.status(400).json({ message: 'Project ID is required' });
     }
 
+    // Verify project exists
+    const project = await Project.findById(projectId).lean();
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
     // If supervisor_id is null or empty, remove supervisor
     if (!supervisor_id) {
       // Remove all supervisor assignments for this project
-      const { error: deleteError } = await supabase
-        .from('supervisor_projects_relation')
-        .delete()
-        .eq('project_id', projectId);
-
-      if (deleteError) {
-        return res.status(500).json({ message: deleteError.message || 'Failed to remove supervisor from project' });
-      }
+      await Project.findByIdAndUpdate(
+        projectId,
+        { $set: { assigned_supervisors: [] } },
+        { new: true }
+      );
 
       return res.json({ 
         message: 'Supervisor removed from project successfully' 
       });
     }
 
-    // Verify project exists
-    const { data: project, error: projectError } = await supabase
-      .from('projects')
-      .select('id')
-      .eq('id', projectId)
-      .maybeSingle();
+    // Verify supervisor exists (check in users table with role='SUPERVISOR')
+    const supervisorUser = await User.findById(supervisor_id)
+      .select('_id role name email isActive')
+      .lean();
 
-    if (projectError || !project) {
-      return res.status(404).json({ message: 'Project not found' });
-    }
-
-    // Verify supervisor exists (check in users table with role='supervisor')
-    const { data: supervisorUser, error: supervisorError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('id', supervisor_id)
-      .eq('role', 'supervisor')
-      .eq('is_active', true)
-      .maybeSingle();
-
-    if (supervisorError || !supervisorUser) {
+    if (!supervisorUser || supervisorUser.role !== 'SUPERVISOR' || !supervisorUser.isActive) {
       return res.status(404).json({ message: 'Supervisor not found or inactive' });
     }
 
     // Remove existing supervisor assignments for this project (only one supervisor per project)
-    await supabase
-      .from('supervisor_projects_relation')
-      .delete()
-      .eq('project_id', projectId);
+    // Then add the new supervisor
+    const supervisorAssignment = {
+      supervisor_id: supervisor_id,
+      supervisor_name: supervisorUser.name || null,
+      supervisor_email: supervisorUser.email || null,
+      assigned_at: new Date(),
+      status: 'active',
+    };
 
-    // Get supervisor profile id from supervisors table
-    const { data: supervisorProfile, error: profileError } = await supabase
-      .from('supervisors')
-      .select('id')
-      .eq('user_id', supervisor_id)
-      .maybeSingle();
-
-    if (profileError || !supervisorProfile) {
-      return res.status(404).json({ message: 'Supervisor profile not found' });
-    }
-
-    // Assign new supervisor to project
-    const { data, error } = await supabase
-      .from('supervisor_projects_relation')
-      .insert({
-        supervisor_id: supervisorProfile.id,
-        project_id: projectId,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to assign supervisor to project' });
-    }
+    await Project.findByIdAndUpdate(
+      projectId,
+      { 
+        $set: { assigned_supervisors: [supervisorAssignment] }
+      },
+      { new: true }
+    );
 
     return res.json({ 
-      relation: data, 
+      relation: {
+        supervisor_id: supervisor_id,
+        project_id: projectId,
+        assigned_at: supervisorAssignment.assigned_at,
+      },
       message: 'Supervisor assigned to project successfully' 
     });
   } catch (err) {
@@ -447,59 +330,43 @@ router.post('/:id/assign-supervisor', async (req, res) => {
 router.post('/assign-all-supervisors', async (req, res) => {
   try {
     // Get all projects
-    const { data: projects, error: projectsError } = await supabase
-      .from('projects')
-      .select('id');
-
-    if (projectsError) {
-      return res.status(500).json({ message: 'Failed to fetch projects' });
-    }
-
-    // Get all supervisors
-    const { data: supervisors, error: supervisorsError } = await supabase
-      .from('supervisors')
-      .select('id');
-
-    if (supervisorsError) {
-      return res.status(500).json({ message: 'Failed to fetch supervisors' });
-    }
+    const projects = await Project.find().select('_id').lean();
 
     if (!projects || projects.length === 0) {
       return res.status(400).json({ message: 'No projects found' });
     }
+
+    // Get all supervisors (users with role='SUPERVISOR')
+    const supervisors = await User.find({ 
+      role: 'SUPERVISOR',
+      isActive: true 
+    }).select('_id name email').lean();
 
     if (!supervisors || supervisors.length === 0) {
       return res.status(400).json({ message: 'No supervisors found' });
     }
 
     // Assign all supervisors to all projects
-    const relations = [];
+    let totalRelations = 0;
     for (const project of projects) {
-      for (const supervisor of supervisors) {
-        relations.push({
-          supervisor_id: supervisor.id,
-          project_id: project.id,
-        });
-      }
-    }
+      const supervisorAssignments = supervisors.map(supervisor => ({
+        supervisor_id: supervisor._id.toString(),
+        supervisor_name: supervisor.name || null,
+        supervisor_email: supervisor.email || null,
+        assigned_at: new Date(),
+        status: 'active',
+      }));
 
-    // Insert all relations (using upsert to handle duplicates)
-    const { data: inserted, error: insertError } = await supabase
-      .from('supervisor_projects_relation')
-      .upsert(relations, {
-        onConflict: 'supervisor_id,project_id',
-      })
-      .select();
-
-    if (insertError) {
-      return res.status(500).json({ 
-        message: insertError.message || 'Failed to assign supervisors to projects' 
-      });
+      await Project.findByIdAndUpdate(
+        project._id,
+        { $set: { assigned_supervisors: supervisorAssignments } }
+      );
+      totalRelations += supervisorAssignments.length;
     }
 
     return res.json({ 
       message: `Successfully assigned ${supervisors.length} supervisor(s) to ${projects.length} project(s)`,
-      total_relations: inserted?.length || relations.length,
+      total_relations: totalRelations,
       supervisors_count: supervisors.length,
       projects_count: projects.length,
     });
@@ -524,37 +391,51 @@ router.post('/:id/assign-staffs', async (req, res) => {
     }
 
     // Verify project exists
-    const { data: project, error: projectError } = await supabase
-      .from('projects')
-      .select('id')
-      .eq('id', projectId)
-      .maybeSingle();
-
-    if (projectError || !project) {
+    const project = await Project.findById(projectId).lean();
+    if (!project) {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    // Update all selected staff to this project
-    if (staff_ids.length > 0) {
-      const { error: updateError } = await supabase
-        .from('employees')
-        .update({ project_id: projectId })
-        .in('id', staff_ids);
+    // Get employee details for the staff_ids
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const employees = await EmployeeMerged.find({ 
+      _id: { $in: staff_ids } 
+    }).select('_id name email').lean();
 
-      if (updateError) {
-        return res.status(500).json({ message: updateError.message || 'Failed to assign staffs to project' });
-      }
+    if (employees.length !== staff_ids.length) {
+      return res.status(400).json({ message: 'One or more staff IDs not found' });
     }
 
-    // Get updated staff count
-    const { count: staffCount } = await supabase
-      .from('employees')
-      .select('*', { count: 'exact', head: true })
-      .eq('project_id', projectId);
+    // Get existing assignments
+    const existingAssignments = project.assigned_employees || [];
+    const existingEmployeeIds = new Set(existingAssignments.map(a => a.employee_id?.toString()));
+
+    // Create new assignments for employees not already assigned
+    const newAssignments = employees
+      .filter(emp => !existingEmployeeIds.has(emp._id.toString()))
+      .map(emp => ({
+        employee_id: emp._id.toString(),
+        employee_name: emp.name || null,
+        employee_email: emp.email || null,
+        assigned_at: new Date(),
+        status: 'active',
+      }));
+
+    // Combine existing and new assignments
+    const allAssignments = [...existingAssignments, ...newAssignments];
+
+    // Update project with all assignments
+    await Project.findByIdAndUpdate(
+      projectId,
+      { $set: { assigned_employees: allAssignments } },
+      { new: true }
+    );
+
+    const staffCount = allAssignments.filter(a => a.status === 'active').length;
 
     return res.json({ 
-      message: `Successfully assigned ${staff_ids.length} staff(s) to project`,
-      staff_count: staffCount || 0
+      message: `Successfully assigned ${newAssignments.length} staff(s) to project`,
+      staff_count: staffCount
     });
   } catch (err) {
     console.error('Assign staffs error', err);
@@ -571,37 +452,34 @@ router.delete('/:id/remove-staff/:staffId', async (req, res) => {
       return res.status(400).json({ message: 'Project ID and Staff ID are required' });
     }
 
-    // Verify staff is assigned to this project
-    const { data: staff, error: staffError } = await supabase
-      .from('employees')
-      .select('id, project_id')
-      .eq('id', staffId)
-      .eq('project_id', projectId)
-      .maybeSingle();
+    // Get project
+    const project = await Project.findById(projectId).lean();
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
 
-    if (staffError || !staff) {
+    // Find and remove the staff assignment
+    const assignments = project.assigned_employees || [];
+    const updatedAssignments = assignments.filter(
+      assignment => assignment.employee_id?.toString() !== staffId
+    );
+
+    if (assignments.length === updatedAssignments.length) {
       return res.status(404).json({ message: 'Staff not found or not assigned to this project' });
     }
 
-    // Remove staff from project (set project_id to null)
-    const { error: updateError } = await supabase
-      .from('employees')
-      .update({ project_id: null })
-      .eq('id', staffId);
+    // Update project with removed assignment
+    await Project.findByIdAndUpdate(
+      projectId,
+      { $set: { assigned_employees: updatedAssignments } },
+      { new: true }
+    );
 
-    if (updateError) {
-      return res.status(500).json({ message: updateError.message || 'Failed to remove staff from project' });
-    }
-
-    // Get updated staff count
-    const { count: staffCount } = await supabase
-      .from('employees')
-      .select('*', { count: 'exact', head: true })
-      .eq('project_id', projectId);
+    const staffCount = updatedAssignments.filter(a => a.status === 'active').length;
 
     return res.json({ 
       message: 'Staff removed from project successfully',
-      staff_count: staffCount || 0
+      staff_count: staffCount
     });
   } catch (err) {
     console.error('Remove staff error', err);
@@ -618,38 +496,62 @@ router.get('/:id/staffs', async (req, res) => {
       return res.status(400).json({ message: 'Project ID is required' });
     }
 
-    const { data, error } = await supabase
-      .from('employees')
-      .select('id, name, email, phone, role')
-      .eq('project_id', projectId)
-      .order('name', { ascending: true });
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch project staffs' });
+    // Get project with assigned employees
+    const project = await Project.findById(projectId).lean();
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
     }
 
-    return res.json({ staffs: data || [] });
+    // Get active assigned employees from embedded array
+    const activeAssignments = (project.assigned_employees || []).filter(
+      emp => emp.status === 'active'
+    );
+
+    // Fetch employee details
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const employeeIds = activeAssignments.map(a => a.employee_id);
+    const employees = await EmployeeMerged.find({ 
+      _id: { $in: employeeIds } 
+    })
+      .select('_id name email phone role')
+      .sort({ name: 1 })
+      .lean();
+
+    // Format response
+    const staffs = employees.map(emp => ({
+      id: emp._id.toString(),
+      name: emp.name,
+      email: emp.email,
+      phone: emp.phone || null,
+      role: emp.role || null,
+    }));
+
+    return res.json({ staffs });
   } catch (err) {
     console.error('Get project staffs error', err);
     return res.status(500).json({ message: 'Error fetching project staffs' });
   }
 });
 
-// GET /admin/projects/supervisors/list - Get all supervisors (users with role='supervisor')
+// GET /admin/projects/supervisors/list - Get all supervisors (users with role='SUPERVISOR')
 router.get('/supervisors/list', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, name, email, phone')
-      .eq('role', 'supervisor')
-      .eq('is_active', true)
-      .order('name', { ascending: true });
+    const supervisors = await User.find({ 
+      role: 'SUPERVISOR',
+      isActive: true 
+    })
+      .select('_id name email phone')
+      .sort({ name: 1 })
+      .lean();
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch supervisors' });
-    }
+    const formattedSupervisors = supervisors.map(sup => ({
+      id: sup._id.toString(),
+      name: sup.name,
+      email: sup.email,
+      phone: sup.phone || null,
+    }));
 
-    return res.json({ supervisors: data || [] });
+    return res.json({ supervisors: formattedSupervisors });
   } catch (err) {
     console.error('Get supervisors error', err);
     return res.status(500).json({ message: 'Error fetching supervisors' });

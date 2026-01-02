@@ -1,31 +1,6 @@
 'use server';
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
-import bcrypt from 'bcryptjs';
-
-// Create Supabase client (server-side)
-// For admin operations, use SERVICE_ROLE_KEY to bypass RLS
-function getSupabase() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  // Try to use service role key first (for admin operations), fallback to anon key
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing Supabase credentials in .env.local');
-  }
-  
-  console.log('🔑 Using Supabase with URL:', supabaseUrl);
-  console.log('🔑 Key type:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SERVICE_ROLE (bypasses RLS)' : 'ANON (subject to RLS)');
-  
-  return createSupabaseClient(supabaseUrl, supabaseKey);
-}
-
-// Hash password using bcrypt (industry standard)
-async function hashPassword(password: string): Promise<string> {
-  const saltRounds = 12; // Higher = more secure but slower (10-12 recommended)
-  return await bcrypt.hash(password, saltRounds);
-}
 
 export interface ClientData {
   id: string;
@@ -204,53 +179,10 @@ export async function getClientById(id: string) {
       };
     }
 
-    // Fetch associated projects
-    const { data: projects, error: projectsError } = await supabase
-      .from('projects')
-      .select('id, name, location, start_date, end_date, status, budget, created_at')
-      .eq('client_user_id', id)
-      .order('created_at', { ascending: false });
-
-    if (projectsError) {
-      console.error('Error fetching projects:', projectsError);
-    } else {
-      console.log(`✅ Found ${projects?.length || 0} projects for client ${id}`);
-    }
-
-    // Fetch associated supervisors
-    const { data: supervisors, error: supervisorsError } = await supabase
-      .from('supervisors')
-      .select('id, name, email, phone, created_at')
-      .eq('client_user_id', id)
-      .order('name');
-
-    if (supervisorsError) {
-      console.error('Error fetching supervisors:', supervisorsError);
-    } else {
-      console.log(`✅ Found ${supervisors?.length || 0} supervisors for client ${id}`);
-    }
-
-    // Fetch associated staff/employees
-    const { data: staff, error: staffError } = await supabase
-      .from('employees')
-      .select('id, name, email, phone, role, project_id')
-      .eq('client_user_id', id)
-      .order('name');
-
-    if (staffError) {
-      console.error('Error fetching staff:', staffError);
-    } else {
-      console.log(`✅ Found ${staff?.length || 0} staff for client ${id}`);
-    }
-
+    // The backend already returns projects, supervisors, and staff in the response
     return {
       success: true,
-      data: {
-        ...data,
-        projects: projects || [],
-        supervisors: supervisors || [],
-        staff: staff || [],
-      },
+      data: result.data,
     };
   } catch (error: any) {
     console.error('Error fetching client:', error);
@@ -336,134 +268,75 @@ export async function createClient(formData: {
   is_active?: boolean;
 }) {
   try {
-    const supabase = getSupabase();
+    // Get auth token from cookies
+    const { cookies } = await import('next/headers');
+    const cookieStore = await cookies();
+    const token = cookieStore.get('auth_token')?.value;
     
-    const { name, email, phone, password, is_active = true } = formData;
-    
-    console.log('🔵 Creating client with data:', { name, email, phone, is_active });
-    
-    // Validate name
-    if (!name || !name.trim()) {
-      console.error('❌ Validation failed: Name is required');
+    if (!token) {
       return {
         success: false,
-        error: 'Name is required',
-      };
-    }
-    
-    if (name.trim().length < 2) {
-      return {
-        success: false,
-        error: 'Name must be at least 2 characters',
-      };
-    }
-    
-    // Validate email
-    const emailValidation = validateEmail(email);
-    if (!emailValidation.valid) {
-      console.error('❌ Email validation failed:', emailValidation.error);
-      return {
-        success: false,
-        error: emailValidation.error,
-      };
-    }
-    
-    // Validate password
-    const passwordValidation = validatePassword(password);
-    if (!passwordValidation.valid) {
-      console.error('❌ Password validation failed:', passwordValidation.error);
-      return {
-        success: false,
-        error: passwordValidation.error,
-      };
-    }
-    
-    // Validate phone (optional)
-    // Singapore: 8 digits, International: 8-13 digits
-    if (phone && phone.trim()) {
-      const cleanPhone = phone.replace(/[\s+\-()]/g, '');
-      if (!/^\d+$/.test(cleanPhone)) {
-        return {
-          success: false,
-          error: 'Phone number must contain only digits',
-        };
-      }
-      if (cleanPhone.length < 8 || cleanPhone.length > 13) {
-        return {
-          success: false,
-          error: 'Phone number must be 8-13 digits (Singapore: 8 digits)',
-        };
-      }
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    // Check if email exists
-    console.log('🔍 Checking if email exists:', normalizedEmail);
-    const { data: existing, error: checkError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', normalizedEmail)
-      .maybeSingle();
-
-    if (checkError) {
-      console.error('❌ Error checking email:', checkError);
-      return {
-        success: false,
-        error: `Database error: ${checkError.message}`,
+        error: 'Unauthorized',
       };
     }
 
-    if (existing) {
-      console.error('❌ Email already exists:', normalizedEmail);
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+    
+    // Build request payload
+    const payload: any = {
+      name: formData.name,
+      email: formData.email,
+      password: formData.password,
+    };
+    
+    if (formData.phone !== undefined) {
+      payload.phone = formData.phone || null;
+    }
+    
+    if (formData.is_active !== undefined) {
+      payload.is_active = formData.is_active;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/clients`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Failed to create client' }));
       return {
         success: false,
-        error: 'Email already exists',
+        error: errorData.error || errorData.message || 'Failed to create client',
       };
     }
 
-    // Hash password
-    const passwordHash = await hashPassword(password);
-    console.log('✅ Password hashed');
+    const result = await response.json();
 
-    // Insert user
-    console.log('💾 Inserting user into database...');
-    const { data, error } = await supabase
-      .from('users')
-      .insert({
-        email: normalizedEmail,
-        password_hash: passwordHash,
-        role: 'client',
-        name,
-        phone: phone || null,
-        is_active,
-      })
-      .select('id, name, email, phone, role, is_active, created_at')
-      .single();
-
-    if (error) {
-      console.error('❌ Insert error:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
-      throw error;
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Failed to create client',
+      };
     }
 
-    console.log('✅ Client created successfully:', data);
-
-    // Revalidate the clients page
+    // Revalidate pages
     revalidatePath('/clients');
 
     return {
       success: true,
-      message: 'Client created successfully',
-      data,
+      message: result.message || 'Client created successfully',
+      data: result.data,
     };
   } catch (error: any) {
-    console.error('❌ Error creating client:', error);
-    console.error('Error stack:', error.stack);
+    console.error('Error creating client:', error);
     return {
       success: false,
       error: error.message || 'Failed to create client',
-      details: error,
     };
   }
 }
@@ -482,74 +355,56 @@ export async function updateClient(
   }
 ) {
   try {
-    const supabase = getSupabase();
+    // Get auth token from cookies
+    const { cookies } = await import('next/headers');
+    const cookieStore = await cookies();
+    const token = cookieStore.get('auth_token')?.value;
     
-    const { name, email, phone, password, is_active } = formData;
-
-    // Check if client exists
-    const { data: existing } = await supabase
-      .from('users')
-      .select('id')
-      .eq('id', id)
-      .eq('role', 'client')
-      .single();
-
-    if (!existing) {
+    if (!token) {
       return {
         success: false,
-        error: 'Client not found',
+        error: 'Unauthorized',
       };
     }
 
-    // Build update object
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+    
+    // Build update payload
     const updates: any = {};
-    
-    if (name !== undefined) updates.name = name;
-    if (phone !== undefined) updates.phone = phone || null;
-    if (is_active !== undefined) updates.is_active = is_active;
-    
-    if (email !== undefined) {
-      const normalizedEmail = email.trim().toLowerCase();
-      
-      // Check if email exists for another user
-      const { data: emailCheck } = await supabase
-        .from('users')
-        .select('id')
-        .eq('email', normalizedEmail)
-        .neq('id', id)
-        .single();
-
-      if (emailCheck) {
-        return {
-          success: false,
-          error: 'Email already exists',
-        };
-      }
-      
-      updates.email = normalizedEmail;
+    if (formData.name !== undefined) updates.name = formData.name;
+    if (formData.email !== undefined) updates.email = formData.email;
+    if (formData.phone !== undefined) updates.phone = formData.phone || null;
+    if (formData.password !== undefined && formData.password.trim()) {
+      updates.password = formData.password;
     }
+    if (formData.is_active !== undefined) updates.is_active = formData.is_active;
 
-    if (password && password.trim()) {
-      updates.password_hash = await hashPassword(password);
-    }
+    const response = await fetch(`${API_BASE_URL}/api/admin/clients/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+      cache: 'no-store',
+    });
 
-    if (Object.keys(updates).length === 0) {
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Failed to update client' }));
       return {
         success: false,
-        error: 'No fields to update',
+        error: errorData.error || errorData.message || 'Failed to update client',
       };
     }
 
-    // Update user
-    const { data, error } = await supabase
-      .from('users')
-      .update(updates)
-      .eq('id', id)
-      .eq('role', 'client')
-      .select('id, name, email, phone, role, is_active, created_at')
-      .single();
+    const result = await response.json();
 
-    if (error) throw error;
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Failed to update client',
+      };
+    }
 
     // Revalidate pages
     revalidatePath('/clients');
@@ -557,8 +412,8 @@ export async function updateClient(
 
     return {
       success: true,
-      message: 'Client updated successfully',
-      data,
+      message: result.message || 'Client updated successfully',
+      data: result.data,
     };
   } catch (error: any) {
     console.error('Error updating client:', error);
@@ -574,37 +429,51 @@ export async function updateClient(
  */
 export async function deleteClient(id: string) {
   try {
-    const supabase = getSupabase();
+    // Get auth token from cookies
+    const { cookies } = await import('next/headers');
+    const cookieStore = await cookies();
+    const token = cookieStore.get('auth_token')?.value;
     
-    // Check if client exists
-    const { data: existing } = await supabase
-      .from('users')
-      .select('id, name')
-      .eq('id', id)
-      .eq('role', 'client')
-      .single();
-
-    if (!existing) {
+    if (!token) {
       return {
         success: false,
-        error: 'Client not found',
+        error: 'Unauthorized',
       };
     }
 
-    // Delete user
-    const { error } = await supabase
-      .from('users')
-      .delete()
-      .eq('id', id);
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+    const response = await fetch(`${API_BASE_URL}/api/admin/clients/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      cache: 'no-store',
+    });
 
-    if (error) throw error;
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Failed to delete client' }));
+      return {
+        success: false,
+        error: errorData.error || errorData.message || 'Failed to delete client',
+      };
+    }
+
+    const result = await response.json();
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Failed to delete client',
+      };
+    }
 
     // Revalidate the clients page
     revalidatePath('/clients');
 
     return {
       success: true,
-      message: 'Client deleted successfully',
+      message: result.message || 'Client deleted successfully',
     };
   } catch (error: any) {
     console.error('Error deleting client:', error);

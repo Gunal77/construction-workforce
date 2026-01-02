@@ -39,6 +39,8 @@ export default function TimesheetsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [selectedTimesheetIds, setSelectedTimesheetIds] = useState<string[]>([]);
+  const [isBulkApproving, setIsBulkApproving] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -64,6 +66,11 @@ export default function TimesheetsPage() {
     fetchTimesheets();
     setCurrentPage(1);
   }, [view, currentDate, statusFilter, approvalStatusFilter, projectFilter, employeeFilter, showAllData]);
+
+  // Clear selection when filters change
+  useEffect(() => {
+    setSelectedTimesheetIds([]);
+  }, [view, currentDate, statusFilter, approvalStatusFilter, projectFilter, employeeFilter, showAllData, searchQuery]);
 
   const fetchEmployees = async () => {
     try {
@@ -232,6 +239,8 @@ export default function TimesheetsPage() {
     try {
       await timesheetAPI.approveTimesheet(id);
       setSuccessMessage('Timesheet approved successfully!');
+      // Remove from selection if selected
+      setSelectedTimesheetIds(selectedTimesheetIds.filter(selectedId => selectedId !== id));
       fetchTimesheets();
       setTimeout(() => setSuccessMessage(''), 3000);
     } catch (err: any) {
@@ -269,6 +278,63 @@ export default function TimesheetsPage() {
       setTimeout(() => setSuccessMessage(''), 3000);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to reject overtime');
+    }
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedTimesheetIds.length === 0) {
+      setError('Please select at least one timesheet to approve');
+      return;
+    }
+
+    // Filter to only include timesheets that can be approved (not already approved)
+    const approvableTimesheets = filteredTimesheets.filter(
+      t => selectedTimesheetIds.includes(t.id) && t.approval_status !== 'Approved'
+    );
+
+    if (approvableTimesheets.length === 0) {
+      setError('Selected timesheets are already approved or cannot be approved');
+      return;
+    }
+
+    try {
+      setIsBulkApproving(true);
+      setError('');
+      const ids = approvableTimesheets.map(t => t.id);
+      const result = await timesheetAPI.bulkApprove(ids);
+      setSuccessMessage(result.message || `Successfully approved ${result.approved || ids.length} timesheet(s)`);
+      setSelectedTimesheetIds([]);
+      fetchTimesheets();
+      setTimeout(() => setSuccessMessage(''), 3000);
+    } catch (err: any) {
+      console.error('Bulk approve error:', err);
+      const errorMessage = err.response?.data?.message || err.message || 'Failed to bulk approve timesheets';
+      setError(errorMessage);
+      setTimeout(() => setError(''), 5000);
+    } finally {
+      setIsBulkApproving(false);
+    }
+  };
+
+  // Handle checkbox selection
+  const handleCheckboxChange = (timesheetId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedTimesheetIds([...selectedTimesheetIds, timesheetId]);
+    } else {
+      setSelectedTimesheetIds(selectedTimesheetIds.filter(id => id !== timesheetId));
+    }
+  };
+
+  // Handle select all (only approvable timesheets)
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      const approvableIds = paginatedTimesheets
+        .filter(t => t.approval_status !== 'Approved')
+        .map(t => t.id);
+      setSelectedTimesheetIds([...new Set([...selectedTimesheetIds, ...approvableIds])]);
+    } else {
+      const visibleIds = paginatedTimesheets.map(t => t.id);
+      setSelectedTimesheetIds(selectedTimesheetIds.filter(id => !visibleIds.includes(id)));
     }
   };
 
@@ -403,7 +469,53 @@ export default function TimesheetsPage() {
     return <span className={`${baseClasses} bg-blue-100 text-blue-800`}>OT: {otHoursNum.toFixed(2)}h</span>;
   };
 
+  // Check if all approvable timesheets on current page are selected
+  const approvableTimesheets = paginatedTimesheets.filter(t => t.approval_status !== 'Approved');
+  const allApprovableSelected = approvableTimesheets.length > 0 && 
+    approvableTimesheets.every(t => selectedTimesheetIds.includes(t.id));
+  const someApprovableSelected = approvableTimesheets.some(t => selectedTimesheetIds.includes(t.id));
+
   const columns = [
+    {
+      key: 'checkbox',
+      header: 'Select',
+      renderHeader: () => (
+        <div className="flex items-center justify-center h-full">
+          <input
+            type="checkbox"
+            checked={allApprovableSelected && approvableTimesheets.length > 0}
+            ref={(input) => {
+              if (input) input.indeterminate = someApprovableSelected && !allApprovableSelected;
+            }}
+            onChange={(e) => handleSelectAll(e.target.checked)}
+            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded cursor-pointer"
+            title={allApprovableSelected ? "Deselect all" : "Select all approvable timesheets"}
+          />
+        </div>
+      ),
+      render: (item: Timesheet) => {
+        const isApprovable = item.approval_status !== 'Approved';
+        const isChecked = selectedTimesheetIds.includes(item.id);
+        
+        return (
+          <div className="flex items-center justify-center h-full">
+            <input
+              type="checkbox"
+              checked={isChecked}
+              disabled={!isApprovable}
+              onChange={(e) => {
+                e.stopPropagation();
+                handleCheckboxChange(item.id, e.target.checked);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className={`h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded ${
+                isApprovable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+              }`}
+            />
+          </div>
+        );
+      },
+    },
     {
       key: 'staff',
       header: 'Staff',
@@ -728,6 +840,15 @@ export default function TimesheetsPage() {
       <div className="flex items-center justify-between flex-wrap gap-4 min-w-0">
         <h1 className="text-2xl font-bold text-gray-900">Timesheets</h1>
         <div className="flex items-center space-x-2">
+          <button
+            onClick={handleBulkApprove}
+            disabled={selectedTimesheetIds.length === 0 || isBulkApproving}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+            title={selectedTimesheetIds.length > 0 ? `Approve ${selectedTimesheetIds.length} selected timesheet(s)` : 'Select timesheets to approve'}
+          >
+            <CheckCircle2 className={`h-4 w-4 ${isBulkApproving ? 'animate-spin' : ''}`} />
+            <span>Bulk Approve ({selectedTimesheetIds.length})</span>
+          </button>
           <button
             onClick={handleExportPDF}
             disabled={isExportingPDF || filteredTimesheets.length === 0}

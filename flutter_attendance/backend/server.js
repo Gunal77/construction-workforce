@@ -1,11 +1,11 @@
 const express = require('express');
 const multer = require('multer');
 const env = require('./config/env');
-const { initializeDatabase } = require('./config/db');
+const { connectMongoDB, isConnected } = require('./config/mongodb');
 const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuth');
 const supervisorAuthRoutes = require('./routes/supervisorAuth');
-const unifiedAuthRoutes = require('./routes/unifiedAuth'); // NEW: Unified authentication
+const unifiedAuthRoutes = require('./routes/unifiedAuth');
 const supervisorRoutes = require('./routes/supervisorRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const monthlySummaryRoutes = require('./routes/monthlySummaryRoutes');
@@ -25,6 +25,7 @@ const clientAuthRoutes = require('./routes/clientAuth');
 const clientStaffsRoutes = require('./routes/clientStaffs');
 const clientAttendanceRoutes = require('./routes/clientAttendance');
 const clientSupervisorsRoutes = require('./routes/clientSupervisors');
+const fileRoutes = require('./routes/fileRoutes');
 
 const app = express();
 
@@ -32,13 +33,25 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  const health = {
+    status: 'ok',
+    database: {
+      provider: 'mongodb',
+      connected: isConnected(),
+    },
+    timestamp: new Date().toISOString(),
+  };
+  
+  res.json(health);
 });
 
+// MongoDB + JWT Authentication
 app.use('/api/auth', authRoutes);
-app.use('/api/v2/auth', unifiedAuthRoutes); // NEW: Unified authentication endpoint
-app.use(['/api/admin/auth', '/admin/auth'], adminAuthRoutes); // Legacy
-app.use(['/api/supervisor/auth', '/supervisor/auth'], supervisorAuthRoutes); // Legacy
+
+// Auth routes
+app.use('/api/v2/auth', unifiedAuthRoutes);
+app.use(['/api/admin/auth', '/admin/auth'], adminAuthRoutes);
+app.use(['/api/supervisor/auth', '/supervisor/auth'], supervisorAuthRoutes);
 app.use(['/api/supervisor', '/supervisor'], supervisorRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/monthly-summaries', monthlySummaryRoutes);
@@ -46,13 +59,17 @@ app.use('/api/leave', leaveRoutes);
 app.use('/api/timesheets', timesheetRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/reminders', reminderRoutes);
-// Register employee assignment routes first (more specific routes)
+app.use('/api/files', fileRoutes);
+
+// Admin routes
 app.use(['/api/admin/projects', '/admin/projects'], projectEmployeesRoutes);
 app.use(['/api/admin/projects', '/admin/projects'], adminProjectsRoutes);
 app.use(['/api/admin/employees', '/admin/employees'], adminEmployeesRoutes);
 app.use(['/api/admin/clients', '/admin/clients'], adminClientsRoutes);
 app.use(['/api/admin/staffs', '/admin/staffs'], adminStaffsRoutes);
 app.use(['/api/admin/supervisors', '/admin/supervisors'], adminSupervisorsRoutes);
+
+// Client routes
 app.use(['/api/client/projects', '/client/projects'], clientProjectsRoutes);
 app.use(['/api/client', '/client'], clientAuthRoutes);
 app.use(['/api/client/staffs', '/client/staffs'], clientStaffsRoutes);
@@ -82,10 +99,23 @@ app.use((err, req, res, next) => {
 
 const startServer = async () => {
   try {
-    await initializeDatabase();
+    console.log(`\n📊 Database Configuration:`);
+    console.log(`   Provider: MongoDB`);
+    
+    if (!env.mongodbUri) {
+      console.error('❌ MONGODB_URI is not set!');
+      throw new Error('MONGODB_URI is required');
+    }
+    
+    // Display URI (hide password)
+    const displayUri = env.mongodbUri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@');
+    console.log(`   MongoDB URI: ${displayUri}`);
+    
+    await connectMongoDB();
+    console.log('✅ MongoDB connected successfully');
+    
     app.listen(env.port, () => {
       console.log(`Server listening on port ${env.port}`);
-      // Start reminder scheduler
       startScheduler();
     });
   } catch (error) {
@@ -97,4 +127,3 @@ const startServer = async () => {
 startServer();
 
 module.exports = app;
-

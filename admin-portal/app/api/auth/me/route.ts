@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
 
 export async function GET(request: NextRequest) {
   try {
@@ -19,14 +19,23 @@ export async function GET(request: NextRequest) {
     });
 
     if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Backend /api/v2/auth/me error:', errorData);
       return NextResponse.json(
-        { message: 'Failed to fetch user info' },
+        { message: errorData.message || 'Failed to fetch user info' },
         { status: response.status }
       );
     }
 
     const data = await response.json();
-    return NextResponse.json(data);
+    // Ensure the response has the correct structure
+    if (data.success && data.data) {
+      return NextResponse.json(data);
+    } else if (data.data) {
+      return NextResponse.json({ success: true, data: data.data });
+    } else {
+      return NextResponse.json({ success: true, data: data });
+    }
   } catch (error: any) {
     console.error('GET /api/auth/me error:', error);
     return NextResponse.json(

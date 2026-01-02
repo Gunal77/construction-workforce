@@ -1,5 +1,5 @@
 const express = require('express');
-const { supabase } = require('../config/supabaseClient');
+const mongoose = require('mongoose');
 const { verifyToken } = require('../utils/jwt');
 
 const router = express.Router();
@@ -16,12 +16,26 @@ const clientAuthMiddleware = (req, res, next) => {
   try {
     const decoded = verifyToken(token);
 
-    if (decoded.role !== 'client') {
+    // Check for CLIENT role (uppercase from MongoDB) or 'client' (lowercase)
+    const role = decoded.role?.toLowerCase();
+    if (role !== 'client') {
       return res.status(403).json({ message: 'Client privileges required' });
     }
 
+    // Handle both 'id' and 'userId' in token payload
+    // The token from unifiedLogin has both 'id' and 'userId' fields
+    let clientId = decoded.id || decoded.userId;
+    
+    // Convert to string if it's an ObjectId
+    if (clientId && typeof clientId === 'object') {
+      clientId = clientId.toString();
+    }
+    if (clientId) {
+      clientId = String(clientId);
+    }
+
     req.client = {
-      id: decoded.id,
+      id: clientId,
       email: decoded.email,
       role: decoded.role,
     };
@@ -47,81 +61,73 @@ router.use(clientAuthMiddleware);
 router.get('/', async (req, res) => {
   try {
     const clientUserId = req.client.id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 9;
+    const skip = (page - 1) * limit;
 
-    // Fetch only projects assigned to this client
-    const { data: projects, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('client_user_id', clientUserId)
-      .order('created_at', { ascending: false });
+    const ProjectMerged = require('../models/ProjectMerged');
+    const User = require('../models/User');
 
-    if (error) {
-      console.error('Supabase error fetching client projects:', error);
-      return res.status(500).json({ message: error.message || 'Failed to fetch projects' });
-    }
+    // Convert clientUserId to string for comparison
+    const clientIdString = String(clientUserId);
+
+    // Get total count for pagination
+    const totalCount = await ProjectMerged.countDocuments({
+      'client.client_id': clientIdString
+    });
+
+    // Fetch projects with pagination
+    const projects = await ProjectMerged.find({
+      'client.client_id': clientIdString
+    })
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
 
     if (!projects || projects.length === 0) {
       return res.json({ 
         projects: [],
-        total: 0
+        total: 0,
+        page: 1,
+        totalPages: 0,
+        limit
       });
     }
 
     // Get client name
-    const { data: clientUser } = await supabase
-      .from('users')
-      .select('name')
-      .eq('id', clientUserId)
-      .maybeSingle();
-    
+    const clientUser = await User.findById(clientUserId).select('name').lean();
     const clientName = clientUser?.name || null;
 
     // Enrich projects with staff counts and supervisor names
-    const enrichedProjects = await Promise.all(
-      projects.map(async (project) => {
-        // Get staff count for this project (from both employees and staffs tables)
-        const { count: employeeCount } = await supabase
-          .from('employees')
-          .select('*', { count: 'exact', head: true })
-          .eq('project_id', project.id);
-        
-        const { count: staffCount } = await supabase
-          .from('staffs')
-          .select('*', { count: 'exact', head: true })
-          .eq('project_id', project.id);
-        
-        const totalStaffCount = (employeeCount || 0) + (staffCount || 0);
+    const enrichedProjects = projects.map((project) => {
+      const staffCount = project.assigned_employees?.filter(emp => emp.status === 'active').length || 0;
+      const supervisorName = project.assigned_supervisors?.find(sup => sup.status === 'active')?.supervisor_name || null;
 
-        // Get assigned supervisor (one per project)
-        const { data: supervisorRelation } = await supabase
-          .from('supervisor_projects_relation')
-          .select('supervisor_id')
-          .eq('project_id', project.id)
-          .limit(1)
-          .maybeSingle();
+      return {
+        id: project._id,
+        name: project.name,
+        location: project.location,
+        start_date: project.start_date,
+        end_date: project.end_date,
+        description: project.description,
+        budget: project.budget ? parseFloat(project.budget.toString()) : null,
+        created_at: project.created_at,
+        staff_count: staffCount,
+        supervisor_name: supervisorName,
+        client_name: clientName,
+        client_user_id: clientUserId,
+      };
+    });
 
-        let supervisorName = null;
-        if (supervisorRelation?.supervisor_id) {
-          const { data: supervisor } = await supabase
-            .from('supervisors')
-            .select('name')
-            .eq('id', supervisorRelation.supervisor_id)
-            .maybeSingle();
-          supervisorName = supervisor?.name || null;
-        }
-
-        return {
-          ...project,
-          staff_count: totalStaffCount,
-          supervisor_name: supervisorName,
-          client_name: clientName, // Add client name to each project
-        };
-      })
-    );
+    const totalPages = Math.ceil(totalCount / limit);
 
     return res.json({ 
       projects: enrichedProjects,
-      total: enrichedProjects.length
+      total: totalCount,
+      page,
+      totalPages,
+      limit
     });
   } catch (err) {
     console.error('Get client projects error', err);
@@ -134,27 +140,28 @@ router.get('/stats', async (req, res) => {
   try {
     const clientUserId = req.client.id;
 
+    const ProjectMerged = require('../models/ProjectMerged');
+
     // Fetch all projects for this client
-    const { data, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('client_user_id', clientUserId);
+    // Convert clientUserId to string for comparison
+    const clientIdString = String(clientUserId);
+    const projects = await ProjectMerged.find({
+      'client.client_id': clientIdString
+    }).lean();
 
-    if (error) {
-      console.error('Supabase error fetching client project stats:', error);
-      return res.status(500).json({ message: error.message || 'Failed to fetch project stats' });
-    }
-
-    const projects = data || [];
     const totalProjects = projects.length;
+    const now = new Date();
     const activeProjects = projects.filter(
-      (project) => !project.end_date || new Date(project.end_date) > new Date()
+      (project) => !project.end_date || new Date(project.end_date) > now
     ).length;
     const completedProjects = projects.filter(
-      (project) => project.end_date && new Date(project.end_date) <= new Date()
+      (project) => project.end_date && new Date(project.end_date) <= now
     ).length;
     const totalBudget = projects.reduce(
-      (sum, project) => sum + (project.budget || 0),
+      (sum, project) => {
+        const budget = project.budget ? parseFloat(project.budget.toString()) : 0;
+        return sum + budget;
+      },
       0
     );
 

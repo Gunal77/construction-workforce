@@ -11,7 +11,10 @@ const supervisorAuthMiddleware = (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, env.jwtSecret);
 
-    if (decoded.role !== 'supervisor') {
+    // Check role - handle both uppercase and lowercase
+    const role = decoded.role?.toLowerCase();
+    if (role !== 'supervisor') {
+      console.log(`[Supervisor Auth] Access denied. Role: ${decoded.role}, Expected: supervisor`);
       return res.status(403).json({ message: 'Supervisor access required' });
     }
 

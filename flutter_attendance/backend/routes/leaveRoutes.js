@@ -1,22 +1,32 @@
 const express = require('express');
 const multer = require('multer');
 const leaveController = require('../controllers/leaveController');
-const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
 const authMiddleware = require('../middleware/authMiddleware');
-const db = require('../config/db');
+const authorizeRoles = require('../middleware/authorizeRoles');
+const employeeRepository = require('../repositories/employeeRepository');
 
-// Staff middleware for mobile app (similar to monthlySummaryRoutes)
+// Staff middleware for mobile app - ensures user is a WORKER and has employee record
 const staffMiddleware = async (req, res, next) => {
-  if (!req.user?.id || !req.user?.email) {
-    return res.status(403).json({ message: 'Employee privileges required: User ID or email missing from token.' });
+  // Check if user is authenticated
+  if (!req.user) {
+    return res.status(401).json({ message: 'Authentication required' });
   }
+
+  // Check if user is a WORKER
+  if (req.user.role !== 'WORKER') {
+    return res.status(403).json({ message: 'Worker privileges required' });
+  }
+
+  // Find employee by user email (employees are linked to users by email)
   try {
-    const { rows } = await db.query('SELECT id FROM employees WHERE email = $1', [req.user.email]);
-    if (rows.length === 0) {
-      return res.status(403).json({ message: 'Employee privileges required: User not found in employees table.' });
+    const employee = await employeeRepository.findByEmail(req.user.email);
+    
+    if (!employee) {
+      return res.status(403).json({ message: 'Employee record not found. Please contact administrator.' });
     }
+    
     // Attach employee_id to req for controllers that need it
-    req.employeeId = rows[0].id;
+    req.employeeId = employee.id;
     next();
   } catch (error) {
     console.error('Error in staffMiddleware:', error);
@@ -49,31 +59,29 @@ const upload = multer({
 
 const router = express.Router();
 
-// Staff routes (mobile app) - with file upload support
-router.get('/staff/types', authMiddleware, staffMiddleware, leaveController.getLeaveTypes);
-router.get('/staff/balance', authMiddleware, staffMiddleware, async (req, res) => {
+// Staff routes (mobile app) - WORKER role only, with file upload support
+router.get('/staff/types', authMiddleware, authorizeRoles('WORKER'), staffMiddleware, leaveController.getLeaveTypes);
+router.get('/staff/balance', authMiddleware, authorizeRoles('WORKER'), staffMiddleware, async (req, res) => {
   // Redirect to balance endpoint with employee ID
   req.params.employeeId = req.employeeId;
   return leaveController.getLeaveBalance(req, res);
 });
-router.get('/staff/requests', authMiddleware, staffMiddleware, async (req, res) => {
+router.get('/staff/requests', authMiddleware, authorizeRoles('WORKER'), staffMiddleware, async (req, res) => {
   // Filter by employee ID
   req.query.employeeId = req.employeeId;
   return leaveController.getLeaveRequests(req, res);
 });
-router.post('/staff/requests', authMiddleware, staffMiddleware, upload.single('mcDocument'), async (req, res) => {
+router.post('/staff/requests', authMiddleware, authorizeRoles('WORKER'), staffMiddleware, upload.single('mcDocument'), async (req, res) => {
   // Set employee ID from middleware
   req.body.employeeId = req.employeeId;
   req.body.employee_id = req.employeeId;
   return leaveController.createLeaveRequest(req, res);
 });
 // Staff endpoint to fetch employees for stand-in selector
-router.get('/staff/employees', authMiddleware, staffMiddleware, async (req, res) => {
+router.get('/staff/employees', authMiddleware, authorizeRoles('WORKER'), staffMiddleware, async (req, res) => {
   try {
-    const { rows } = await db.query(
-      `SELECT id, name, email FROM employees ORDER BY name ASC`
-    );
-    return res.json({ employees: rows });
+    const employees = await employeeRepository.findAll({ orderBy: 'name asc' });
+    return res.json({ employees });
   } catch (error) {
     console.error('Error fetching employees for stand-in:', error);
     return res.status(500).json({ message: 'Failed to fetch employees' });
@@ -86,15 +94,15 @@ router.get('/balance/:employeeId', authMiddleware, leaveController.getLeaveBalan
 router.get('/requests', authMiddleware, leaveController.getLeaveRequests);
 router.post('/requests', authMiddleware, upload.single('mcDocument'), leaveController.createLeaveRequest);
 
-// Admin routes
-router.get('/admin/types', adminAuthMiddleware, leaveController.getLeaveTypes);
-router.get('/admin/balance/:employeeId', adminAuthMiddleware, leaveController.getLeaveBalance);
-router.get('/admin/requests', adminAuthMiddleware, leaveController.getLeaveRequests);
-router.post('/admin/requests', adminAuthMiddleware, leaveController.createLeaveRequest);
-router.get('/admin/statistics', adminAuthMiddleware, leaveController.getLeaveStatistics);
-router.put('/admin/requests/:requestId/status', adminAuthMiddleware, leaveController.updateLeaveRequestStatus);
-router.post('/admin/requests/bulk-approve', adminAuthMiddleware, leaveController.bulkApproveLeaveRequests);
-router.post('/admin/initialize-balances', adminAuthMiddleware, leaveController.initializeLeaveBalances);
+// Admin/Supervisor routes - approve/manage leave requests
+router.get('/admin/types', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.getLeaveTypes);
+router.get('/admin/balance/:employeeId', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.getLeaveBalance);
+router.get('/admin/requests', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.getLeaveRequests);
+router.post('/admin/requests', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.createLeaveRequest);
+router.get('/admin/statistics', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.getLeaveStatistics);
+router.put('/admin/requests/:requestId/status', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.updateLeaveRequestStatus);
+router.post('/admin/requests/bulk-approve', authMiddleware, authorizeRoles('ADMIN', 'SUPERVISOR'), leaveController.bulkApproveLeaveRequests);
+router.post('/admin/initialize-balances', authMiddleware, authorizeRoles('ADMIN'), leaveController.initializeLeaveBalances);
 
 module.exports = router;
 

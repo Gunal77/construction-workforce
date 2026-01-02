@@ -1,0 +1,2 @@
+# This directory stores authenticated session state for Playwright tests.
+# The actual .json files are gitignored for security.

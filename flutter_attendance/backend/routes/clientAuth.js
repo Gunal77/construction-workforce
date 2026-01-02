@@ -1,24 +1,17 @@
 const express = require('express');
-const bcrypt = require('bcrypt');
-const { getClient } = require('../config/db');
 const { signToken } = require('../utils/jwt');
+const User = require('../models/User');
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
 // POST /api/client/signup - Client registration
 router.post('/signup', async (req, res) => {
-  const client = await getClient();
-  let transactionStarted = false;
   try {
-    await client.query('BEGIN');
-    transactionStarted = true;
-
     const { name, email, phone, password, companyName, contactPerson, address } = req.body;
 
     // Validation
     if (!name || !email || !password || !companyName) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
       return res.status(400).json({
         success: false,
         message: 'Name, email, password, and company name are required',
@@ -37,14 +30,8 @@ router.post('/signup', async (req, res) => {
     const normalizedEmail = email.toString().trim().toLowerCase();
 
     // Check if user already exists
-    const existingUser = await client.query(
-      'SELECT id FROM users WHERE LOWER(email) = $1',
-      [normalizedEmail]
-    );
-
-    if (existingUser.rows.length > 0) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
       return res.status(409).json({
         success: false,
         message: 'An account with this email already exists',
@@ -53,8 +40,6 @@ router.post('/signup', async (req, res) => {
 
     // Password validation
     if (password.length < 8 || password.length > 128) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
       return res.status(400).json({
         success: false,
         message: 'Password must be between 8 and 128 characters',
@@ -62,8 +47,6 @@ router.post('/signup', async (req, res) => {
     }
 
     if (!/[A-Z]/.test(password)) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
       return res.status(400).json({
         success: false,
         message: 'Password must contain at least one uppercase letter',
@@ -71,8 +54,6 @@ router.post('/signup', async (req, res) => {
     }
 
     if (!/[a-z]/.test(password)) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
       return res.status(400).json({
         success: false,
         message: 'Password must contain at least one lowercase letter',
@@ -80,8 +61,6 @@ router.post('/signup', async (req, res) => {
     }
 
     if (!/[0-9]/.test(password)) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
       return res.status(400).json({
         success: false,
         message: 'Password must contain at least one number',
@@ -89,61 +68,43 @@ router.post('/signup', async (req, res) => {
     }
 
     if (!/[!@#$%^&*]/.test(password)) {
-      await client.query('ROLLBACK');
-      transactionStarted = false;
       return res.status(400).json({
         success: false,
         message: 'Password must contain at least one special character (!@#$%^&*)',
       });
     }
 
-    // Hash password
-    const saltRounds = 12;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    // Create new user (password will be hashed by pre-save hook)
+    const userId = uuidv4();
+    const user = new User({
+      _id: userId,
+      name: name.trim(),
+      email: normalizedEmail,
+      password, // Will be hashed by pre-save hook
+      role: 'CLIENT',
+      phone: phone?.trim() || null,
+      isActive: true,
+    });
 
-    // Insert into users table
-    const userResult = await client.query(
-      `INSERT INTO users (email, password_hash, role, user_type, name, phone, is_active, created_at)
-       VALUES ($1, $2, 'client', 'client', $3, $4, TRUE, NOW())
-       RETURNING id, email, name, phone, role, created_at`,
-      [normalizedEmail, passwordHash, name.trim(), phone?.trim() || null]
-    );
+    await user.save();
 
-    const newUserId = userResult.rows[0].id;
-
-    // Insert into clients profile table
-    const clientProfileResult = await client.query(
-      `INSERT INTO clients (user_id, company_name, contact_person, address, created_at)
-       VALUES ($1, $2, $3, $4, NOW())
-       RETURNING id, company_name, contact_person, address`,
-      [newUserId, companyName.trim(), contactPerson?.trim() || name.trim(), address?.trim() || null]
-    );
-
-    const profileId = clientProfileResult.rows[0].id;
-
-    // Update users.profile_id
-    await client.query('UPDATE users SET profile_id = $1 WHERE id = $2', [profileId, newUserId]);
-
-    await client.query('COMMIT');
+    const userData = user.toJSON();
 
     return res.status(201).json({
       success: true,
       message: 'Account created successfully. Please log in.',
       data: {
-        id: newUserId,
-        email: userResult.rows[0].email,
-        name: userResult.rows[0].name,
+        id: userData.id,
+        email: userData.email,
+        name: userData.name,
         role: 'client',
       },
     });
   } catch (error) {
-    if (transactionStarted) {
-      await client.query('ROLLBACK').catch(console.error);
-    }
     console.error('Client signup error:', error);
 
-    // Handle unique constraint violation
-    if (error.code === '23505') {
+    // Handle duplicate email error (MongoDB duplicate key error)
+    if (error.code === 11000 || error.message.includes('duplicate')) {
       return res.status(409).json({
         success: false,
         message: 'An account with this email already exists',
@@ -154,10 +115,6 @@ router.post('/signup', async (req, res) => {
       success: false,
       message: 'Failed to create account. Please try again.',
     });
-  } finally {
-    if (client && typeof client.release === 'function') {
-      client.release();
-    }
   }
 });
 

@@ -1,6 +1,8 @@
 const bcrypt = require('bcrypt');
-const pool = require('../config/db');
 const { signToken } = require('../utils/jwt');
+const User = require('../models/User');
+const EmployeeMerged = require('../models/EmployeeMerged');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Unified Login for ALL user types (admin, client, supervisor, staff)
@@ -20,65 +22,45 @@ const unifiedLogin = async (req, res) => {
 
     const normalizedEmail = email.toString().trim().toLowerCase();
 
-    // Query unified users table with profile status
-    const query = `
-      SELECT 
-        u.id,
-        u.email,
-        u.password_hash,
-        u.role,
-        u.user_type,
-        u.name,
-        u.phone,
-        u.is_active,
-        u.profile_id,
-        CASE 
-          WHEN u.role = 'admin' THEN a.status
-          WHEN u.role = 'staff' THEN e.status
-          ELSE 'active'
-        END as profile_status
-      FROM users u
-      LEFT JOIN admins a ON a.user_id = u.id
-      LEFT JOIN employees e ON e.user_id = u.id
-      WHERE LOWER(u.email) = $1
-    `;
+    // MongoDB: Find user by email
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
-    const result = await pool.query(query, [normalizedEmail]);
-
-    if (result.rows.length === 0) {
+    if (!user) {
       return res.status(401).json({ 
         success: false,
         message: 'Invalid credentials' 
       });
     }
 
-    const user = result.rows[0];
-
-    // Check if user is active in users table
-    if (!user.is_active) {
+    // Check if user is active
+    if (!user.isActive) {
       return res.status(403).json({ 
         success: false,
         message: 'Account is inactive. Please contact administrator.' 
       });
     }
 
-    // Check profile status (for admin and staff)
-    if (user.profile_status === 'inactive') {
-      return res.status(403).json({ 
-        success: false,
-        message: 'Account is inactive. Please contact administrator.' 
-      });
+    // Check employee status for WORKER role
+    if (user.role === 'WORKER') {
+      const employee = await EmployeeMerged.findOne({ user_id: user._id.toString() }).lean();
+      if (employee && employee.status === 'inactive') {
+        return res.status(403).json({ 
+          success: false,
+          message: 'Account is inactive. Please contact administrator.' 
+        });
+      }
     }
 
     // Enforce role-based access control
-    if (user.role === 'admin' && source === 'mobile-app') {
+    const userRole = user.role.toUpperCase();
+    if (userRole === 'ADMIN' && source === 'mobile-app') {
       return res.status(403).json({ 
         success: false,
         message: 'Admin accounts can only access the Admin Portal. Please use the web application.' 
       });
     }
 
-    if (user.role === 'staff' && source === 'admin-portal') {
+    if (userRole === 'WORKER' && source === 'admin-portal') {
       return res.status(403).json({ 
         success: false,
         message: 'Staff accounts can only access the Mobile App. Please use the mobile application.' 
@@ -86,7 +68,7 @@ const unifiedLogin = async (req, res) => {
     }
 
     // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
       return res.status(401).json({ 
         success: false,
@@ -95,22 +77,27 @@ const unifiedLogin = async (req, res) => {
     }
 
     // Generate JWT token with role
+    // Ensure userId and id are strings for consistent token payload
+    const userIdString = user._id.toString();
     const token = signToken({
-      id: user.id,
+      userId: userIdString,
+      id: userIdString,
       email: user.email,
       role: user.role,
-      userType: user.user_type
+      userType: user.role.toLowerCase()
     });
 
-    // Prepare user response (exclude password_hash)
+    const userData = user.toJSON();
+
+    // Prepare user response
     const userResponse = {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      userType: user.user_type,
-      name: user.name,
-      phone: user.phone,
-      profileId: user.profile_id
+      id: userData.id,
+      email: userData.email,
+      role: userData.role.toLowerCase(),
+      userType: userData.role.toLowerCase(),
+      name: userData.name,
+      phone: userData.phone || null,
+      profileId: null // Not used in MongoDB
     };
 
     return res.json({
@@ -146,63 +133,53 @@ const createUser = async (req, res) => {
       });
     }
 
-    // Validate role
-    const validRoles = ['admin', 'client', 'supervisor', 'staff'];
-    if (!validRoles.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid role. Must be one of: ${validRoles.join(', ')}`
-      });
-    }
-
     const normalizedEmail = email.toString().trim().toLowerCase();
 
     // Check if user already exists
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE LOWER(email) = $1',
-      [normalizedEmail]
-    );
-
-    if (existingUser.rows.length > 0) {
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
       return res.status(409).json({
         success: false,
         message: 'User with this email already exists'
       });
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    // Validate role
+    const validRoles = ['ADMIN', 'SUPERVISOR', 'WORKER', 'CLIENT'];
+    const upperRole = role.toUpperCase();
+    if (!validRoles.includes(upperRole)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role. Must be one of: ${validRoles.join(', ')}`
+      });
+    }
 
-    // Insert into users table
-    const query = `
-      INSERT INTO users (email, password_hash, role, user_type, name, phone, is_active)
-      VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-      RETURNING id, email, role, user_type, name, phone, created_at
-    `;
+    // Create new user (password will be hashed by pre-save hook)
+    const userId = uuidv4();
+    const newUser = new User({
+      _id: userId,
+      email: normalizedEmail,
+      password, // Will be hashed by pre-save hook
+      role: upperRole,
+      name: name?.trim() || null,
+      phone: phone?.trim() || null,
+      isActive: true,
+    });
 
-    const result = await pool.query(query, [
-      normalizedEmail,
-      passwordHash,
-      role,
-      userType || role,
-      name,
-      phone
-    ]);
-
-    const newUser = result.rows[0];
+    await newUser.save();
+    const userData = newUser.toJSON();
 
     return res.status(201).json({
       success: true,
       message: 'User created successfully',
       data: {
-        id: newUser.id,
-        email: newUser.email,
-        role: newUser.role,
-        userType: newUser.user_type,
-        name: newUser.name,
-        phone: newUser.phone,
-        createdAt: newUser.created_at
+        id: userData.id,
+        email: userData.email,
+        role: userData.role.toLowerCase(),
+        userType: userData.role.toLowerCase(),
+        name: userData.name,
+        phone: userData.phone || null,
+        createdAt: userData.createdAt
       }
     });
 
@@ -220,32 +197,41 @@ const createUser = async (req, res) => {
  */
 const getCurrentUser = async (req, res) => {
   try {
-    const userId = req.user?.id || req.admin?.id;
+    // Extract userId from token payload (can be 'id' or 'userId')
+    let userId = req.user?.id || req.user?.userId || req.admin?.id;
 
     if (!userId) {
+      console.error('getCurrentUser: No userId found in request', {
+        user: req.user,
+        admin: req.admin
+      });
       return res.status(401).json({
         success: false,
         message: 'Unauthorized'
       });
     }
 
-    const query = `
-      SELECT 
-        u.id,
-        u.email,
-        u.role,
-        u.user_type,
-        u.name,
-        u.phone,
-        u.is_active,
-        u.created_at
-      FROM users u
-      WHERE u.id = $1
-    `;
+    // Convert to string if it's an ObjectId or other object
+    if (userId && typeof userId === 'object' && userId.toString) {
+      userId = userId.toString();
+    }
+    userId = String(userId).trim();
 
-    const result = await pool.query(query, [userId]);
+    // MongoDB: Find user by ID (User model uses string _id)
+    let user = await User.findById(userId).lean();
+    
+    // If not found, try finding by email as fallback
+    if (!user && req.user?.email) {
+      user = await User.findOne({ email: req.user.email.toLowerCase().trim() }).lean();
+    }
 
-    if (result.rows.length === 0) {
+    if (!user) {
+      // Log for debugging but don't expose sensitive info
+      console.error('getCurrentUser: User not found', {
+        userId: userId?.substring(0, 10) + '...',
+        email: req.user?.email,
+        hasTokenPayload: !!req.user
+      });
       return res.status(404).json({
         success: false,
         message: 'User not found'
@@ -254,7 +240,16 @@ const getCurrentUser = async (req, res) => {
 
     return res.json({
       success: true,
-      data: result.rows[0]
+      data: {
+        id: user._id.toString(),
+        email: user.email,
+        role: user.role.toLowerCase(),
+        userType: user.role.toLowerCase(),
+        name: user.name,
+        phone: user.phone || null,
+        is_active: user.isActive !== false,
+        created_at: user.createdAt
+      }
     });
 
   } catch (error) {
@@ -264,6 +259,12 @@ const getCurrentUser = async (req, res) => {
       message: 'Failed to fetch user'
     });
   }
+};
+
+module.exports = {
+  unifiedLogin,
+  createUser,
+  getCurrentUser
 };
 
 module.exports = {

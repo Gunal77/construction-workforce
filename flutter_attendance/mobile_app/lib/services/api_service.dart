@@ -126,6 +126,29 @@ class ApiService {
     return _decodeResponse(response);
   }
 
+  Future<Map<String, dynamic>> fetchMonthlySummaryByMonth(int month, int year) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final uri = Uri.parse('$_baseUrl/monthly-summaries/staff/by-month')
+        .replace(queryParameters: {
+      'month': month.toString(),
+      'year': year.toString(),
+    });
+
+    final response = await _client.get(
+      uri,
+      headers: {
+        HttpHeaders.authorizationHeader: 'Bearer $_token',
+        HttpHeaders.acceptHeader: 'application/json',
+      },
+    );
+
+    return _decodeResponse(response);
+  }
+
   // Leave Requests API
   Future<List<dynamic>> fetchLeaveTypes() async {
     await loadSession();
@@ -319,6 +342,31 @@ class ApiService {
         HttpHeaders.acceptHeader: 'application/json',
       },
       body: jsonEncode({'signature': signature}),
+    );
+
+    return _decodeResponse(response);
+  }
+
+  Future<Map<String, dynamic>> signMonthlySummaryByMonth(int month, int year, String signature) async {
+    await loadSession();
+    if (_token == null) {
+      throw ApiException('Not authenticated');
+    }
+
+    final uri = Uri.parse('$_baseUrl/monthly-summaries/staff/by-month/sign');
+
+    final response = await _client.post(
+      uri,
+      headers: {
+        HttpHeaders.authorizationHeader: 'Bearer $_token',
+        HttpHeaders.contentTypeHeader: 'application/json',
+        HttpHeaders.acceptHeader: 'application/json',
+      },
+      body: jsonEncode({
+        'signature': signature,
+        'month': month,
+        'year': year,
+      }),
     );
 
     return _decodeResponse(response);

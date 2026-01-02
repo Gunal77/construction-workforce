@@ -10,10 +10,14 @@ class MonthlySummaryDetailScreen extends StatefulWidget {
   const MonthlySummaryDetailScreen({
     super.key,
     required this.summaryId,
+    this.month,
+    this.year,
     required this.onSigned,
   });
 
-  final String summaryId;
+  final String? summaryId;
+  final int? month;
+  final int? year;
   final VoidCallback onSigned;
 
   @override
@@ -28,6 +32,8 @@ class _MonthlySummaryDetailScreenState
   bool _isSigning = false;
   String? _errorMessage;
   String? _signature;
+  int? _summaryMonth;
+  int? _summaryYear;
 
   @override
   void initState() {
@@ -42,20 +48,59 @@ class _MonthlySummaryDetailScreenState
     });
 
     try {
-      final response = await ApiService().fetchMonthlySummaryById(widget.summaryId);
+      Map<String, dynamic> response;
+      
+      // Try ID-based lookup first if ID is provided
+      if (widget.summaryId != null && widget.summaryId!.isNotEmpty) {
+        try {
+          response = await ApiService().fetchMonthlySummaryById(widget.summaryId!);
+        } catch (idError) {
+          // If ID lookup fails and we have month/year, try alternative method
+          if (widget.month != null && widget.year != null) {
+            print('[DEBUG] ID lookup failed, trying month/year lookup: ${idError.toString()}');
+            response = await ApiService().fetchMonthlySummaryByMonth(widget.month!, widget.year!);
+          } else {
+            rethrow;
+          }
+        }
+      } else if (widget.month != null && widget.year != null) {
+        // Use month/year lookup if no ID provided
+        response = await ApiService().fetchMonthlySummaryByMonth(widget.month!, widget.year!);
+      } else {
+        throw ApiException('Summary ID or month/year is required');
+      }
+      
       if (mounted) {
         setState(() {
           _summary = response['summary'];
+          // Store month/year from loaded summary for signing
+          if (_summary != null) {
+            _summaryMonth = _summary!['month'] ?? widget.month;
+            _summaryYear = _summary!['year'] ?? widget.year;
+            print('[DEBUG] Loaded summary - ID: ${_summary!['id']}, _id: ${_summary!['_id']}, Month: $_summaryMonth, Year: $_summaryYear');
+          } else {
+            _summaryMonth = widget.month;
+            _summaryYear = widget.year;
+          }
           _isLoading = false;
+          
+          // Check if it's an empty state response
+          if (response['empty'] == true) {
+            _errorMessage = response['message'] ?? 'Monthly summary not generated yet. Please contact admin.';
+          }
         });
       }
     } catch (error) {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = error is ApiException
-              ? error.message
-              : 'Failed to load monthly summary';
+          if (error is ApiException && error.statusCode == 404) {
+            _errorMessage = 'Monthly summary not generated yet. Please contact admin.';
+          } else {
+            _errorMessage = error is ApiException
+                ? error.message
+                : 'Failed to load monthly summary';
+          }
         });
       }
     }
@@ -69,13 +114,68 @@ class _MonthlySummaryDetailScreenState
       return;
     }
 
+    if (_summary == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Summary data is missing. Please reload the page.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isSigning = true;
       _errorMessage = null;
     });
 
     try {
-      await ApiService().signMonthlySummary(widget.summaryId, _signature!);
+      // Priority 1: Use summary ID from loaded summary (most reliable)
+      String? summaryId = _summary?['id']?.toString();
+      if (summaryId == null || summaryId.isEmpty) {
+        summaryId = _summary?['_id']?.toString();
+      }
+      if (summaryId == null || summaryId.isEmpty) {
+        summaryId = widget.summaryId?.toString();
+      }
+      
+      // Priority 2: Use month/year from loaded summary
+      int? monthToUse = _summary?['month'];
+      int? yearToUse = _summary?['year'];
+      
+      // Priority 3: Fallback to stored or widget values
+      if (monthToUse == null) monthToUse = _summaryMonth ?? widget.month;
+      if (yearToUse == null) yearToUse = _summaryYear ?? widget.year;
+      
+      print('[DEBUG] Sign attempt - SummaryID: $summaryId, Month: $monthToUse, Year: $yearToUse');
+      print('[DEBUG] Loaded summary data - ID: ${_summary?['id']}, _id: ${_summary?['_id']}, Month: ${_summary?['month']}, Year: ${_summary?['year']}');
+      
+      // Try ID-based signing first (most reliable if we have the ID)
+      if (summaryId != null && summaryId.isNotEmpty) {
+        try {
+          print('[DEBUG] Attempting ID-based sign with ID: $summaryId');
+          await ApiService().signMonthlySummary(summaryId, _signature!);
+          print('[DEBUG] ID-based sign successful');
+        } catch (idError) {
+          print('[DEBUG] ID-based sign failed: ${idError.toString()}');
+          // If ID signing fails and we have month/year, try month/year signing
+          if (monthToUse != null && yearToUse != null) {
+            print('[DEBUG] Falling back to month/year sign - Month: $monthToUse, Year: $yearToUse');
+            await ApiService().signMonthlySummaryByMonth(monthToUse, yearToUse, _signature!);
+            print('[DEBUG] Month/year sign successful');
+          } else {
+            rethrow;
+          }
+        }
+      } else if (monthToUse != null && yearToUse != null) {
+        // No ID available, use month/year signing
+        print('[DEBUG] No ID available, using month/year sign - Month: $monthToUse, Year: $yearToUse');
+        await ApiService().signMonthlySummaryByMonth(monthToUse, yearToUse, _signature!);
+        print('[DEBUG] Month/year sign successful');
+      } else {
+        throw ApiException('Summary ID or month/year is required. Please reload the page.');
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -87,13 +187,36 @@ class _MonthlySummaryDetailScreenState
         Navigator.pop(context);
       }
     } catch (error) {
+      print('[ERROR] Sign error: $error');
+      String errorMsg = 'Failed to sign monthly summary';
+      
+      if (error is ApiException) {
+        // Use the backend's error message directly - it's more accurate
+        errorMsg = error.message;
+        // Only override for specific cases
+        if (error.statusCode == 400 && error.message.contains('already signed')) {
+          errorMsg = error.message; // Use the exact message for already signed
+        }
+        // For 404, use backend message (should be "Monthly summary not found" not employee record)
+        // For 403, use backend message (should be "Unauthorized" not employee record)
+      } else {
+        errorMsg = 'Failed to sign monthly summary: ${error.toString()}';
+      }
+      
       if (mounted) {
         setState(() {
           _isSigning = false;
-          _errorMessage = error is ApiException
-              ? error.message
-              : 'Failed to sign monthly summary';
+          _errorMessage = errorMsg;
         });
+        
+        // Show error snackbar
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
       }
     }
   }
@@ -158,9 +281,40 @@ class _MonthlySummaryDetailScreenState
                     ],
                   ),
                 )
-              : _summary == null
-                  ? const Center(child: Text('Summary not found'))
-                  : SingleChildScrollView(
+              : _summary == null && _errorMessage != null
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.description_outlined,
+                            size: 64,
+                            color: Colors.grey.shade300,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            _errorMessage ?? 'Monthly summary not generated yet. Please contact admin.',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              color: AppTheme.textColor,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Summaries are generated by administrators.',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    )
+                  : _summary == null
+                      ? const Center(child: CircularProgressIndicator())
+                      : SingleChildScrollView(
                       physics: const ClampingScrollPhysics(),
                       padding: const EdgeInsets.all(16),
                       child: Column(

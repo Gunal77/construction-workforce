@@ -120,10 +120,21 @@ async function getDashboardData() {
       p.end_date && new Date(p.end_date) <= new Date()
     ).length;
 
-    // Calculate on hold projects (check status field)
-    const onHoldProjects = projects.filter((p: any) => 
-      p.status && (p.status.toLowerCase() === 'on_hold' || p.status.toLowerCase() === 'on hold' || p.status === 'ON HOLD')
-    ).length;
+    // Calculate on hold projects
+    // In MongoDB, projects may not have a status field, so we check if it exists
+    // For projects without status, we can consider them "on hold" if they're past end_date but not completed
+    // or if they have no start_date/end_date (inactive projects)
+    const onHoldProjects = projects.filter((p: any) => {
+      if (p.status) {
+        // If status field exists, check for on hold status
+        const statusLower = p.status.toLowerCase();
+        return statusLower === 'on_hold' || statusLower === 'on hold' || p.status === 'ON HOLD';
+      } else {
+        // For MongoDB projects without status field, consider projects with no dates or past end date as potentially on hold
+        // But for now, return 0 since we don't have a clear definition
+        return false;
+      }
+    }).length;
 
     return {
       totalWorkers: employees.length,

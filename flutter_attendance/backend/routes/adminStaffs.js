@@ -1,70 +1,117 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/db');
-const { requireAdmin } = require('../middleware/unifiedAuthMiddleware');
+const mongoose = require('mongoose');
+const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/authorizeRoles');
 
-// All routes require admin authentication
-router.use(requireAdmin);
+// All routes require authentication and ADMIN role
+router.use(authMiddleware);
+router.use(authorizeRoles('ADMIN'));
 
 // GET /admin/staffs - Fetch all staffs (with project and client info if available)
 router.get('/', async (req, res) => {
   try {
     const { search, projectId, clientId, sortBy = 'created_at', sortOrder = 'DESC' } = req.query;
     
-    let query = `
-      SELECT 
-        s.id,
-        s.name,
-        s.email,
-        s.phone,
-        s.role,
-        s.project_id,
-        s.client_user_id,
-        s.created_at,
-        s.updated_at,
-        p.name as project_name,
-        p.location as project_location,
-        u.name as client_name
-      FROM staffs s
-      LEFT JOIN projects p ON p.id = s.project_id
-      LEFT JOIN users u ON u.id = s.client_user_id
-      WHERE 1=1
-    `;
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const User = require('../models/User');
     
-    const values = [];
-    let paramCount = 1;
+    // Build query
+    const query = {};
     
+    // Search filter
     if (search) {
-      query += ` AND (s.name ILIKE $${paramCount} OR s.email ILIKE $${paramCount} OR s.phone ILIKE $${paramCount} OR s.role ILIKE $${paramCount})`;
-      values.push(`%${search}%`);
-      paramCount++;
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { role: { $regex: search, $options: 'i' } }
+      ];
     }
     
+    // Project filter
     if (projectId) {
-      query += ` AND s.project_id = $${paramCount}`;
-      values.push(projectId);
-      paramCount++;
+      query['project_assignments.project_id'] = projectId;
+      query['project_assignments.status'] = 'active';
     }
     
+    // Client filter - get employees assigned to projects belonging to this client
     if (clientId) {
-      query += ` AND s.client_user_id = $${paramCount}`;
-      values.push(clientId);
-      paramCount++;
+      const clientProjects = await ProjectMerged.find({
+        'client.client_id': clientId
+      }).select('_id').lean();
+      
+      if (clientProjects.length > 0) {
+        const projectIds = clientProjects.map(p => p._id.toString());
+        query['project_assignments.project_id'] = { $in: projectIds };
+        query['project_assignments.status'] = 'active';
+      } else {
+        // No projects for this client, return empty
+        return res.json({
+          success: true,
+          data: [],
+          count: 0
+        });
+      }
     }
     
-    // Validate sortBy to prevent SQL injection
+    // Build sort
     const allowedSortColumns = ['name', 'email', 'created_at', 'updated_at'];
     const safeSort = allowedSortColumns.includes(sortBy) ? sortBy : 'created_at';
-    const safeOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    const sortDirection = sortOrder.toUpperCase() === 'ASC' ? 1 : -1;
     
-    query += ` ORDER BY s.${safeSort} ${safeOrder}`;
+    const employees = await EmployeeMerged.find(query)
+      .sort({ [safeSort]: sortDirection })
+      .lean();
     
-    const result = await pool.query(query, values);
+    // Enrich with project and client information
+    const projectIds = [...new Set(
+      employees.flatMap(e => 
+        (e.project_assignments || [])
+          .filter(pa => pa.status === 'active')
+          .map(pa => pa.project_id)
+      ).filter(Boolean)
+    )];
+    
+    const [projects, clients] = await Promise.all([
+      ProjectMerged.find({ _id: { $in: projectIds } })
+        .select('_id name location client')
+        .lean(),
+      clientId ? User.findById(clientId).select('_id name').lean() : null
+    ]);
+    
+    const projectMap = new Map(projects.map(p => [p._id.toString(), p]));
+    
+    const enrichedStaffs = employees.map(employee => {
+      const activeAssignments = (employee.project_assignments || [])
+        .filter(pa => pa.status === 'active');
+      
+      // Get first active project assignment
+      const primaryProject = activeAssignments.length > 0
+        ? projectMap.get(activeAssignments[0].project_id)
+        : null;
+      
+      return {
+        id: employee._id.toString(),
+        name: employee.name,
+        email: employee.email,
+        phone: employee.phone,
+        role: employee.role,
+        project_id: primaryProject?._id?.toString() || null,
+        project_name: primaryProject?.name || null,
+        project_location: primaryProject?.location || null,
+        client_user_id: primaryProject?.client?.client_id || null,
+        client_name: primaryProject?.client?.client_name || (clientId && clients ? clients.name : null),
+        created_at: employee.created_at,
+        updated_at: employee.updated_at
+      };
+    });
     
     res.json({
       success: true,
-      data: result.rows,
-      count: result.rows.length
+      data: enrichedStaffs,
+      count: enrichedStaffs.length
     });
   } catch (error) {
     console.error('Error fetching staffs:', error);
@@ -81,38 +128,66 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const query = `
-      SELECT 
-        s.id,
-        s.name,
-        s.email,
-        s.phone,
-        s.role,
-        s.project_id,
-        s.client_user_id,
-        s.created_at,
-        s.updated_at,
-        p.name as project_name,
-        p.location as project_location,
-        u.name as client_name
-      FROM staffs s
-      LEFT JOIN projects p ON p.id = s.project_id
-      LEFT JOIN users u ON u.id = s.client_user_id
-      WHERE s.id = $1
-    `;
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const User = require('../models/User');
     
-    const result = await pool.query(query, [id]);
+    // Convert ID to ObjectId if valid
+    let objectId;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      objectId = new mongoose.Types.ObjectId(id);
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid staff ID format'
+      });
+    }
     
-    if (result.rows.length === 0) {
+    const employee = await EmployeeMerged.findById(objectId).lean();
+    
+    if (!employee) {
       return res.status(404).json({
         success: false,
         error: 'Staff not found'
       });
     }
     
+    // Get project and client info
+    const activeAssignments = (employee.project_assignments || [])
+      .filter(pa => pa.status === 'active');
+    
+    let project = null;
+    let client = null;
+    
+    if (activeAssignments.length > 0) {
+      const projectId = activeAssignments[0].project_id;
+      project = await ProjectMerged.findById(projectId)
+        .select('_id name location client')
+        .lean();
+      
+      if (project?.client?.client_id) {
+        client = await User.findById(project.client.client_id)
+          .select('_id name')
+          .lean();
+      }
+    }
+    
     res.json({
       success: true,
-      data: result.rows[0]
+      data: {
+        id: employee._id.toString(),
+        name: employee.name,
+        email: employee.email,
+        phone: employee.phone,
+        role: employee.role,
+        project_id: project?._id?.toString() || null,
+        project_name: project?.name || null,
+        project_location: project?.location || null,
+        client_user_id: project?.client?.client_id || null,
+        client_name: project?.client?.client_name || client?.name || null,
+        created_at: employee.created_at,
+        updated_at: employee.updated_at
+      }
     });
   } catch (error) {
     console.error('Error fetching staff:', error);
@@ -145,14 +220,14 @@ router.post('/', async (req, res) => {
       });
     }
     
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const User = require('../models/User');
+    
     // If project_id is provided, verify it exists
     if (project_id) {
-      const { rows } = await pool.query(
-        'SELECT id FROM projects WHERE id = $1',
-        [project_id]
-      );
-      
-      if (rows.length === 0) {
+      const project = await ProjectMerged.findById(project_id).lean();
+      if (!project) {
         return res.status(400).json({
           success: false,
           error: 'Invalid project ID'
@@ -162,12 +237,12 @@ router.post('/', async (req, res) => {
     
     // If client_user_id is provided, verify it exists and is a client
     if (client_user_id) {
-      const { rows } = await pool.query(
-        'SELECT id FROM users WHERE id = $1 AND role = $2',
-        [client_user_id, 'client']
-      );
+      const client = await User.findOne({
+        _id: client_user_id,
+        role: { $in: ['CLIENT', 'client'] }
+      }).lean();
       
-      if (rows.length === 0) {
+      if (!client) {
         return res.status(400).json({
           success: false,
           error: 'Invalid client ID'
@@ -175,29 +250,73 @@ router.post('/', async (req, res) => {
       }
     }
     
-    const query = `
-      INSERT INTO staffs (name, email, phone, role, project_id, client_user_id, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-      RETURNING id, name, email, phone, role, project_id, client_user_id, created_at, updated_at
-    `;
+    // Check if email already exists
+    if (email) {
+      const existing = await EmployeeMerged.findOne({ email: email.toLowerCase() }).lean();
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: 'Staff with this email already exists'
+        });
+      }
+    }
     
-    const result = await pool.query(query, [
-      name.trim(),
-      email?.trim() || null,
-      phone?.trim() || null,
-      role?.trim() || null,
-      project_id || null,
-      client_user_id || null
-    ]);
+    // Create new employee
+    const newEmployee = new EmployeeMerged({
+      _id: new mongoose.Types.ObjectId(),
+      name: name.trim(),
+      email: email?.trim().toLowerCase() || null,
+      phone: phone?.trim() || null,
+      role: role?.trim() || null,
+      client_user_id: client_user_id || null,
+      project_assignments: project_id ? [{
+        project_id: project_id,
+        assignment_date: new Date(),
+        status: 'active'
+      }] : [],
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+    
+    await newEmployee.save();
+    
+    // Enrich with project and client info
+    let project = null;
+    let client = null;
+    
+    if (project_id) {
+      project = await ProjectMerged.findById(project_id)
+        .select('_id name location client')
+        .lean();
+      
+      if (project?.client?.client_id) {
+        client = await User.findById(project.client.client_id)
+          .select('_id name')
+          .lean();
+      }
+    }
     
     res.status(201).json({
       success: true,
       message: 'Staff created successfully',
-      data: result.rows[0]
+      data: {
+        id: newEmployee._id.toString(),
+        name: newEmployee.name,
+        email: newEmployee.email,
+        phone: newEmployee.phone,
+        role: newEmployee.role,
+        project_id: project?._id?.toString() || null,
+        project_name: project?.name || null,
+        project_location: project?.location || null,
+        client_user_id: project?.client?.client_id || client_user_id || null,
+        client_name: project?.client?.client_name || client?.name || null,
+        created_at: newEmployee.created_at,
+        updated_at: newEmployee.updated_at
+      }
     });
   } catch (error) {
     console.error('Error creating staff:', error);
-    if (error.code === '23505') { // Unique violation
+    if (error.code === 11000) { // MongoDB duplicate key error
       return res.status(409).json({
         success: false,
         error: 'Staff with this email already exists'
@@ -224,13 +343,25 @@ router.put('/:id', async (req, res) => {
       });
     }
     
-    // Check if staff exists
-    const existingStaff = await pool.query(
-      'SELECT id FROM staffs WHERE id = $1',
-      [id]
-    );
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const ProjectMerged = require('../models/ProjectMerged');
+    const User = require('../models/User');
     
-    if (existingStaff.rows.length === 0) {
+    // Convert ID to ObjectId if valid
+    let objectId;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      objectId = new mongoose.Types.ObjectId(id);
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid staff ID format'
+      });
+    }
+    
+    // Check if staff exists
+    const existingStaff = await EmployeeMerged.findById(objectId).lean();
+    
+    if (!existingStaff) {
       return res.status(404).json({
         success: false,
         error: 'Staff not found'
@@ -238,6 +369,7 @@ router.put('/:id', async (req, res) => {
     }
     
     const updateData = {};
+    
     if (name !== undefined) {
       if (typeof name !== 'string' || name.trim().length === 0) {
         return res.status(400).json({
@@ -247,6 +379,7 @@ router.put('/:id', async (req, res) => {
       }
       updateData.name = name.trim();
     }
+    
     if (email !== undefined) {
       if (email && (!email.includes('@') || email.trim().length === 0)) {
         return res.status(400).json({
@@ -254,38 +387,72 @@ router.put('/:id', async (req, res) => {
           error: 'Invalid email format'
         });
       }
-      updateData.email = email?.trim() || null;
+      
+      // Check if email is already taken by another employee
+      if (email) {
+        const emailLower = email.trim().toLowerCase();
+        const existing = await EmployeeMerged.findOne({
+          email: emailLower,
+          _id: { $ne: objectId }
+        }).lean();
+        
+        if (existing) {
+          return res.status(409).json({
+            success: false,
+            error: 'Staff with this email already exists'
+          });
+        }
+        updateData.email = emailLower;
+      } else {
+        updateData.email = null;
+      }
     }
+    
     if (phone !== undefined) {
       updateData.phone = phone?.trim() || null;
     }
+    
     if (role !== undefined) {
       updateData.role = role?.trim() || null;
     }
+    
     if (project_id !== undefined) {
       if (project_id) {
-        const { rows } = await pool.query(
-          'SELECT id FROM projects WHERE id = $1',
-          [project_id]
-        );
-        
-        if (rows.length === 0) {
+        const project = await ProjectMerged.findById(project_id).lean();
+        if (!project) {
           return res.status(400).json({
             success: false,
             error: 'Invalid project ID'
           });
         }
-      }
-      updateData.project_id = project_id || null;
-    }
-    if (client_user_id !== undefined) {
-      if (client_user_id) {
-        const { rows } = await pool.query(
-          'SELECT id FROM users WHERE id = $1 AND role = $2',
-          [client_user_id, 'client']
+        
+        // Update project assignments
+        const existingAssignments = existingStaff.project_assignments || [];
+        const hasActiveAssignment = existingAssignments.some(
+          pa => pa.project_id === project_id && pa.status === 'active'
         );
         
-        if (rows.length === 0) {
+        if (!hasActiveAssignment) {
+          // Add new project assignment
+          updateData.$push = {
+            project_assignments: {
+              project_id: project_id,
+              assignment_date: new Date(),
+              status: 'active'
+            }
+          };
+        }
+      }
+    }
+    
+    if (client_user_id !== undefined) {
+      if (client_user_id) {
+        const client = await User.findOne({
+          _id: client_user_id,
+          role: { $in: ['CLIENT', 'client'] }
+        }).lean();
+        
+        if (!client) {
           return res.status(400).json({
             success: false,
             error: 'Invalid client ID'
@@ -295,7 +462,7 @@ router.put('/:id', async (req, res) => {
       updateData.client_user_id = client_user_id || null;
     }
     
-    if (Object.keys(updateData).length === 0) {
+    if (Object.keys(updateData).length === 0 && !updateData.$push) {
       return res.status(400).json({
         success: false,
         error: 'No fields to update'
@@ -304,37 +471,67 @@ router.put('/:id', async (req, res) => {
     
     updateData.updated_at = new Date();
     
-    const setClause = Object.keys(updateData).map((key, index) => {
-      return `${key} = $${index + 1}`;
-    }).join(', ');
+    // Build update operation
+    const updateOp = { $set: updateData };
+    if (updateData.$push) {
+      updateOp.$push = updateData.$push;
+      delete updateData.$push;
+    }
     
-    const values = Object.values(updateData);
-    values.push(id);
+    const updated = await EmployeeMerged.findByIdAndUpdate(
+      objectId,
+      updateOp,
+      { new: true }
+    ).lean();
     
-    const query = `
-      UPDATE staffs
-      SET ${setClause}
-      WHERE id = $${values.length}
-      RETURNING id, name, email, phone, role, project_id, client_user_id, created_at, updated_at
-    `;
-    
-    const result = await pool.query(query, values);
-    
-    if (result.rows.length === 0) {
+    if (!updated) {
       return res.status(404).json({
         success: false,
         error: 'Staff not found'
       });
     }
     
+    // Enrich with project and client info
+    const activeAssignments = (updated.project_assignments || [])
+      .filter(pa => pa.status === 'active');
+    
+    let project = null;
+    let client = null;
+    
+    if (activeAssignments.length > 0) {
+      const projectId = activeAssignments[0].project_id;
+      project = await ProjectMerged.findById(projectId)
+        .select('_id name location client')
+        .lean();
+      
+      if (project?.client?.client_id) {
+        client = await User.findById(project.client.client_id)
+          .select('_id name')
+          .lean();
+      }
+    }
+    
     res.json({
       success: true,
       message: 'Staff updated successfully',
-      data: result.rows[0]
+      data: {
+        id: updated._id.toString(),
+        name: updated.name,
+        email: updated.email,
+        phone: updated.phone,
+        role: updated.role,
+        project_id: project?._id?.toString() || null,
+        project_name: project?.name || null,
+        project_location: project?.location || null,
+        client_user_id: project?.client?.client_id || updated.client_user_id || null,
+        client_name: project?.client?.client_name || client?.name || null,
+        created_at: updated.created_at,
+        updated_at: updated.updated_at
+      }
     });
   } catch (error) {
     console.error('Error updating staff:', error);
-    if (error.code === '23505') {
+    if (error.code === 11000) {
       return res.status(409).json({
         success: false,
         error: 'Staff with this email already exists'
@@ -360,12 +557,22 @@ router.delete('/:id', async (req, res) => {
       });
     }
     
-    const { rows } = await pool.query(
-      'DELETE FROM staffs WHERE id = $1 RETURNING id',
-      [id]
-    );
+    const EmployeeMerged = require('../models/EmployeeMerged');
     
-    if (rows.length === 0) {
+    // Convert ID to ObjectId if valid
+    let objectId;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      objectId = new mongoose.Types.ObjectId(id);
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid staff ID format'
+      });
+    }
+    
+    const result = await EmployeeMerged.findByIdAndDelete(objectId);
+    
+    if (!result) {
       return res.status(404).json({
         success: false,
         error: 'Staff not found'
@@ -387,4 +594,3 @@ router.delete('/:id', async (req, res) => {
 });
 
 module.exports = router;
-

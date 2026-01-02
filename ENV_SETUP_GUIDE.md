@@ -30,18 +30,49 @@ This guide explains how to set up environment variables for the backend and admi
 |----------|-------------|---------|
 | `NODE_ENV` | Environment mode (`development` or `production`) | `development` |
 | `PORT` | Server port number | `4000` |
+| `DB_PROVIDER` | Database provider: `supabase` or `mongodb` | `supabase` |
+| `MONGODB_URI` | MongoDB connection string (required when `DB_PROVIDER=mongodb`) | - |
 
 ### Example `.env` File
+
+#### Option 1: Using Supabase (Default)
 
 ```env
 NODE_ENV=development
 PORT=4000
+
+# Database Provider (optional - defaults to 'supabase')
+DB_PROVIDER=supabase
 
 DATABASE_URL=postgresql://postgres:yourpassword@abcdefghijklmnop.supabase.co:5432/postgres?pgbouncer=true
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
 SUPABASE_URL=https://abcdefghijklmnop.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3AiLCJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNjQ1NzI4MDAwLCJleHAiOjE5NjEzMDQwMDB9.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 SUPABASE_BUCKET=attendance-images
+```
+
+#### Option 2: Using MongoDB
+
+```env
+NODE_ENV=development
+PORT=4000
+
+# Database Provider - Set to 'mongodb' to use MongoDB
+DB_PROVIDER=mongodb
+
+# MongoDB Connection String (required when DB_PROVIDER=mongodb)
+# Format: mongodb+srv://username:password@cluster.mongodb.net/database_name
+MONGODB_URI=mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/construction_workforce?retryWrites=true&w=majority
+
+# Still need Supabase for file storage (attendance images, leave documents)
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+SUPABASE_URL=https://abcdefghijklmnop.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3AiLCJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNjQ1NzI4MDAwLCJleHAiOjE5NjEzMDQwMDB9.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+SUPABASE_BUCKET=attendance-images
+
+# Note: DATABASE_URL is still required but only used for Supabase mode
+# When using MongoDB, you can keep it for backward compatibility or remove it
+DATABASE_URL=postgresql://postgres:yourpassword@abcdefghijklmnop.supabase.co:5432/postgres?pgbouncer=true
 ```
 
 ---

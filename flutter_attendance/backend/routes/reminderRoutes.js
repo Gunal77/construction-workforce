@@ -1,12 +1,12 @@
 const express = require('express');
 const reminderService = require('../services/reminderService');
-const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
 const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/authorizeRoles');
 
 const router = express.Router();
 
-// Manual trigger endpoints (for testing and admin use)
-router.post('/check-in', authMiddleware, adminAuthMiddleware, async (req, res) => {
+// Manual trigger endpoints (for testing and admin use) - ADMIN only
+router.post('/check-in', authMiddleware, authorizeRoles('ADMIN'), async (req, res) => {
   try {
     const result = await reminderService.sendCheckInReminders();
     return res.json({ success: true, ...result });
@@ -16,7 +16,7 @@ router.post('/check-in', authMiddleware, adminAuthMiddleware, async (req, res) =
   }
 });
 
-router.post('/check-out', authMiddleware, adminAuthMiddleware, async (req, res) => {
+router.post('/check-out', authMiddleware, authorizeRoles('ADMIN'), async (req, res) => {
   try {
     const result = await reminderService.sendCheckOutReminders();
     return res.json({ success: true, ...result });
@@ -26,7 +26,7 @@ router.post('/check-out', authMiddleware, adminAuthMiddleware, async (req, res) 
   }
 });
 
-router.post('/monthly-summary', authMiddleware, adminAuthMiddleware, async (req, res) => {
+router.post('/monthly-summary', authMiddleware, authorizeRoles('ADMIN'), async (req, res) => {
   try {
     const result = await reminderService.sendMonthlySummaryReminders();
     return res.json({ success: true, ...result });
@@ -36,7 +36,7 @@ router.post('/monthly-summary', authMiddleware, adminAuthMiddleware, async (req,
   }
 });
 
-router.post('/admin-approvals', authMiddleware, adminAuthMiddleware, async (req, res) => {
+router.post('/admin-approvals', authMiddleware, authorizeRoles('ADMIN'), async (req, res) => {
   try {
     const result = await reminderService.sendAdminApprovalReminders();
     return res.json({ success: true, ...result });
@@ -46,7 +46,7 @@ router.post('/admin-approvals', authMiddleware, adminAuthMiddleware, async (req,
   }
 });
 
-router.post('/all', authMiddleware, adminAuthMiddleware, async (req, res) => {
+router.post('/all', authMiddleware, authorizeRoles('ADMIN'), async (req, res) => {
   try {
     const result = await reminderService.runAllReminders();
     return res.json({ success: true, ...result });

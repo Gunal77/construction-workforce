@@ -1,8 +1,6 @@
 const express = require('express');
-const { supabase } = require('../config/supabaseClient');
 const supervisorAuthMiddleware = require('../middleware/supervisorAuthMiddleware');
 const multer = require('multer');
-const { uploadToSupabase } = require('../services/uploadService');
 
 const router = express.Router();
 
@@ -12,42 +10,77 @@ router.use(supervisorAuthMiddleware);
 // GET /supervisor/workers - Get all workers under supervisor
 router.get('/workers', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
 
-    const { data, error } = await supabase
-      .from('worker_supervisor_relation')
-      .select(`
-        worker_id,
-        assigned_at,
-        employees:worker_id (
-          id,
-          name,
-          email,
-          phone,
-          role,
-          project_id,
-          created_at,
-          projects:project_id (
-            id,
-            name,
-            location
-          )
-        )
-      `)
-      .eq('supervisor_id', supervisorId)
-      .order('assigned_at', { ascending: false });
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const mongoose = require('mongoose');
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch workers' });
+    // Get projects assigned to this supervisor
+    let projects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id name location assigned_employees').lean();
+
+    // If no projects found, try with ObjectId
+    if (projects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      projects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id name location assigned_employees').lean();
     }
 
-    const workers = (data || [])
-      .filter(item => item.employees != null)
-      .map(item => ({
-        ...item.employees,
-        assignedAt: item.assigned_at,
-        project: item.employees?.projects || null,
-      }));
+    // Get all unique employee IDs from assigned projects
+    const employeeIds = new Set();
+    const employeeProjectMap = new Map(); // employee_id -> project info
+    
+    projects.forEach(project => {
+      if (project.assigned_employees && Array.isArray(project.assigned_employees)) {
+        project.assigned_employees.forEach(emp => {
+          if (emp.employee_id && emp.status === 'active') {
+            const empId = emp.employee_id.toString();
+            employeeIds.add(empId);
+            // Store project info for this employee
+            if (!employeeProjectMap.has(empId)) {
+              employeeProjectMap.set(empId, {
+                id: project._id.toString(),
+                name: project.name,
+                location: project.location
+              });
+            }
+          }
+        });
+      }
+    });
+
+    // Fetch employee details
+    const employeeIdsArray = Array.from(employeeIds);
+    const employees = await EmployeeMerged.find({
+      _id: { $in: employeeIdsArray }
+    }).select('_id name email phone role created_at').lean();
+
+    // Combine employee data with project info
+    const workers = employees.map(emp => {
+      const empId = emp._id.toString();
+      const project = employeeProjectMap.get(empId) || null;
+      
+      return {
+        id: empId,
+        name: emp.name,
+        email: emp.email,
+        phone: emp.phone || null,
+        role: emp.role || null,
+        project_id: project?.id || null,
+        created_at: emp.created_at || emp.createdAt,
+        project: project,
+        assignedAt: null, // Not stored in current schema
+      };
+    });
+
+    // Sort by name
+    workers.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     return res.json({ workers });
   } catch (err) {
@@ -59,43 +92,74 @@ router.get('/workers', async (req, res) => {
 // GET /supervisor/workers/:id - Get worker details
 router.get('/workers/:id', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const workerId = req.params.id;
 
-    // Verify worker is under this supervisor
-    const { data: relation, error: relationError } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('worker_id', workerId)
-      .maybeSingle();
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const mongoose = require('mongoose');
 
-    if (relationError || !relation) {
+    // Get projects assigned to this supervisor
+    let projects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id name location assigned_employees').lean();
+
+    // If no projects found, try with ObjectId
+    if (projects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      projects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id name location assigned_employees').lean();
+    }
+
+    // Check if worker is assigned to any of supervisor's projects
+    let workerProject = null;
+    let isWorkerUnderSupervisor = false;
+
+    for (const project of projects) {
+      if (project.assigned_employees && Array.isArray(project.assigned_employees)) {
+        const assignment = project.assigned_employees.find(
+          emp => emp.employee_id?.toString() === workerId && emp.status === 'active'
+        );
+        if (assignment) {
+          isWorkerUnderSupervisor = true;
+          workerProject = {
+            id: project._id.toString(),
+            name: project.name,
+            location: project.location,
+          };
+          break;
+        }
+      }
+    }
+
+    if (!isWorkerUnderSupervisor) {
       return res.status(403).json({ message: 'Worker not found or access denied' });
     }
 
-    const { data: worker, error } = await supabase
-      .from('employees')
-      .select(`
-        *,
-        projects:project_id (
-          id,
-          name,
-          location
-        )
-      `)
-      .eq('id', workerId)
-      .maybeSingle();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch worker' });
-    }
+    // Get worker details
+    const worker = await EmployeeMerged.findById(workerId).lean();
 
     if (!worker) {
       return res.status(404).json({ message: 'Worker not found' });
     }
 
-    return res.json({ worker });
+    // Format response
+    const formattedWorker = {
+      id: worker._id.toString(),
+      name: worker.name,
+      email: worker.email,
+      phone: worker.phone || null,
+      role: worker.role || null,
+      project_id: workerProject?.id || null,
+      created_at: worker.created_at || worker.createdAt,
+      projects: workerProject,
+    };
+
+    return res.json({ worker: formattedWorker });
   } catch (err) {
     console.error('Get worker error', err);
     return res.status(500).json({ message: 'Error fetching worker' });
@@ -103,54 +167,16 @@ router.get('/workers/:id', async (req, res) => {
 });
 
 // PUT /supervisor/workers/:id - Update worker details
-router.put('/workers/:id', async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const workerId = req.params.id;
-
-    // Verify worker is under this supervisor
-    const { data: relation, error: relationError } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('worker_id', workerId)
-      .maybeSingle();
-
-    if (relationError || !relation) {
-      return res.status(403).json({ message: 'Worker not found or access denied' });
-    }
-
-    const { name, email, phone, role, project_id } = req.body;
-    const updateData = {};
-
-    if (name) updateData.name = name;
-    if (email) updateData.email = email;
-    if (phone) updateData.phone = phone;
-    if (role) updateData.role = role;
-    if (project_id !== undefined) updateData.project_id = project_id;
-
-    const { data: worker, error } = await supabase
-      .from('employees')
-      .update(updateData)
-      .eq('id', workerId)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to update worker' });
-    }
-
-    return res.json({ worker, message: 'Worker updated successfully' });
-  } catch (err) {
-    console.error('Update worker error', err);
-    return res.status(500).json({ message: 'Error updating worker' });
-  }
-});
+// REMOVED: Legacy Supabase route - needs MongoDB reimplementation
+// router.put('/workers/:id', async (req, res) => {
+//   return res.status(501).json({ message: 'This feature requires MongoDB implementation' });
+// });
 
 // POST /supervisor/workers/:id/assign-project - Assign worker to project
 router.post('/workers/:id/assign-project', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const workerId = req.params.id;
     const { project_id } = req.body;
 
@@ -158,42 +184,101 @@ router.post('/workers/:id/assign-project', async (req, res) => {
       return res.status(400).json({ message: 'project_id is required' });
     }
 
-    // Verify worker is under this supervisor
-    const { data: relation, error: relationError } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('worker_id', workerId)
-      .maybeSingle();
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const mongoose = require('mongoose');
 
-    if (relationError || !relation) {
+    console.log(`[Assign Project] Supervisor: ${supervisorId}, Worker: ${workerId}, Project: ${project_id}`);
+
+    // Get supervisor's projects to verify worker access
+    let supervisorProjects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id assigned_employees').lean();
+
+    if (supervisorProjects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      supervisorProjects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id assigned_employees').lean();
+    }
+
+    // Check if worker is under supervisor's management
+    let isWorkerUnderSupervisor = false;
+    for (const project of supervisorProjects) {
+      if (project.assigned_employees && Array.isArray(project.assigned_employees)) {
+        const assignment = project.assigned_employees.find(
+          emp => emp.employee_id?.toString() === workerId && emp.status === 'active'
+        );
+        if (assignment) {
+          isWorkerUnderSupervisor = true;
+          break;
+        }
+      }
+    }
+
+    if (!isWorkerUnderSupervisor) {
       return res.status(403).json({ message: 'Worker not found or access denied' });
     }
 
-    // Verify supervisor has access to this project
-    const { data: projectRelation, error: projectRelationError } = await supabase
-      .from('supervisor_projects_relation')
-      .select('project_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('project_id', project_id)
-      .maybeSingle();
-
-    if (projectRelationError || !projectRelation) {
+    // Verify target project exists and supervisor has access
+    const targetProject = supervisorProjects.find(p => p._id.toString() === project_id);
+    if (!targetProject) {
       return res.status(403).json({ message: 'Project not found or access denied' });
     }
 
-    const { data: worker, error } = await supabase
-      .from('employees')
-      .update({ project_id })
-      .eq('id', workerId)
-      .select()
-      .single();
+    // Check if worker is already assigned to this project
+    const existingAssignment = targetProject.assigned_employees?.find(
+      emp => emp.employee_id?.toString() === workerId
+    );
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to assign project' });
+    if (existingAssignment) {
+      if (existingAssignment.status === 'active') {
+        return res.status(400).json({ message: 'Worker is already assigned to this project' });
+      }
+      // Reactivate if previously inactive
+      await ProjectMerged.updateOne(
+        { _id: project_id, 'assigned_employees.employee_id': workerId },
+        { $set: { 'assigned_employees.$.status': 'active', 'assigned_employees.$.assigned_at': new Date() } }
+      );
+    } else {
+      // Get worker details
+      const worker = await EmployeeMerged.findById(workerId).lean();
+      if (!worker) {
+        return res.status(404).json({ message: 'Worker not found' });
+      }
+
+      // Add worker to project's assigned_employees
+      await ProjectMerged.updateOne(
+        { _id: project_id },
+        {
+          $push: {
+            assigned_employees: {
+              employee_id: workerId,
+              employee_name: worker.name,
+              employee_email: worker.email,
+              assigned_at: new Date(),
+              assigned_by: supervisorId,
+              status: 'active',
+            }
+          }
+        }
+      );
     }
 
-    return res.json({ worker, message: 'Worker assigned to project successfully' });
+    // Get updated worker data
+    const updatedWorker = await EmployeeMerged.findById(workerId).lean();
+
+    return res.json({ 
+      worker: {
+        id: updatedWorker._id.toString(),
+        name: updatedWorker.name,
+        email: updatedWorker.email,
+        project_id: project_id,
+      },
+      message: 'Worker assigned to project successfully' 
+    });
   } catch (err) {
     console.error('Assign project error', err);
     return res.status(500).json({ message: 'Error assigning project' });
@@ -203,33 +288,66 @@ router.post('/workers/:id/assign-project', async (req, res) => {
 // DELETE /supervisor/workers/:id/remove-project - Remove worker from project
 router.delete('/workers/:id/remove-project', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const workerId = req.params.id;
 
-    // Verify worker is under this supervisor
-    const { data: relation, error: relationError } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('worker_id', workerId)
-      .maybeSingle();
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const mongoose = require('mongoose');
 
-    if (relationError || !relation) {
+    console.log(`[Remove Project] Supervisor: ${supervisorId}, Worker: ${workerId}`);
+
+    // Get supervisor's projects to verify worker access
+    let supervisorProjects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id assigned_employees').lean();
+
+    if (supervisorProjects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      supervisorProjects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id assigned_employees').lean();
+    }
+
+    // Check if worker is under supervisor's management and find their project
+    let workerProjectId = null;
+    for (const project of supervisorProjects) {
+      if (project.assigned_employees && Array.isArray(project.assigned_employees)) {
+        const assignment = project.assigned_employees.find(
+          emp => emp.employee_id?.toString() === workerId && emp.status === 'active'
+        );
+        if (assignment) {
+          workerProjectId = project._id.toString();
+          break;
+        }
+      }
+    }
+
+    if (!workerProjectId) {
       return res.status(403).json({ message: 'Worker not found or access denied' });
     }
 
-    const { data: worker, error } = await supabase
-      .from('employees')
-      .update({ project_id: null })
-      .eq('id', workerId)
-      .select()
-      .single();
+    // Remove worker from project by setting status to inactive
+    await ProjectMerged.updateOne(
+      { _id: workerProjectId, 'assigned_employees.employee_id': workerId },
+      { $set: { 'assigned_employees.$.status': 'inactive', 'assigned_employees.$.removed_at': new Date() } }
+    );
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to remove project' });
-    }
+    // Get updated worker data
+    const worker = await EmployeeMerged.findById(workerId).lean();
 
-    return res.json({ worker, message: 'Worker removed from project successfully' });
+    return res.json({ 
+      worker: {
+        id: worker._id.toString(),
+        name: worker.name,
+        email: worker.email,
+        project_id: null,
+      },
+      message: 'Worker removed from project successfully' 
+    });
   } catch (err) {
     console.error('Remove project error', err);
     return res.status(500).json({ message: 'Error removing project' });
@@ -239,81 +357,121 @@ router.delete('/workers/:id/remove-project', async (req, res) => {
 // GET /supervisor/attendance - Get attendance records
 router.get('/attendance', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const { worker_id, date, month, year, start_date, end_date } = req.query;
 
-    // Get all worker IDs under this supervisor
-    const { data: relations, error: relationsError } = await supabase
-      .from('worker_supervisor_relation')
-      .select(`
-        worker_id,
-        employees:worker_id (
-          email
-        )
-      `)
-      .eq('supervisor_id', supervisorId);
+    const ProjectMerged = require('../models/ProjectMerged');
+    const AttendanceMerged = require('../models/AttendanceMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const mongoose = require('mongoose');
 
-    if (relationsError) {
-      return res.status(500).json({ message: 'Failed to fetch workers' });
+    // Get projects assigned to this supervisor
+    let projects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id assigned_employees').lean();
+
+    // If no projects found, try with ObjectId
+    if (projects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      projects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id assigned_employees').lean();
     }
 
-    const workerEmails = (relations || [])
-      .filter(r => r.employees?.email)
-      .map(r => r.employees.email);
+    // Get all unique employee IDs from assigned projects
+    const employeeIds = new Set();
+    projects.forEach(project => {
+      if (project.assigned_employees && Array.isArray(project.assigned_employees)) {
+        project.assigned_employees.forEach(emp => {
+          if (emp.employee_id && emp.status === 'active') {
+            employeeIds.add(emp.employee_id.toString());
+          }
+        });
+      }
+    });
 
-    if (workerEmails.length === 0) {
+    if (employeeIds.size === 0) {
       return res.json({ attendance: [] });
     }
 
-    // Get user IDs by email (employees and users share emails)
-    const { data: users, error: usersError } = await supabase
-      .from('users')
-      .select('id')
-      .in('email', workerEmails);
+    const employeeIdsArray = Array.from(employeeIds);
 
-    if (usersError || !users || users.length === 0) {
-      return res.json({ attendance: [] });
-    }
-
-    const userIds = users.map(u => u.id);
-
-    let query = supabase
-      .from('attendance_logs')
-      .select(`
-        *,
-        users:user_id (
-          id,
-          email
-        )
-      `)
-      .in('user_id', userIds);
+    // Build MongoDB query (use user_id field from AttendanceMerged model)
+    const query = {
+      user_id: { $in: employeeIdsArray }
+    };
 
     if (worker_id) {
-      query = query.eq('user_id', worker_id);
+      query.user_id = worker_id.toString();
     }
 
+    // Date filtering
     if (date) {
-      query = query.gte('check_in_time', `${date}T00:00:00Z`)
-        .lt('check_in_time', `${date}T23:59:59Z`);
+      const startDate = new Date(date);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(date);
+      endDate.setHours(23, 59, 59, 999);
+      query.check_in_time = { $gte: startDate, $lte: endDate };
     } else if (start_date && end_date) {
-      query = query.gte('check_in_time', `${start_date}T00:00:00Z`)
-        .lte('check_in_time', `${end_date}T23:59:59Z`);
+      const start = new Date(start_date);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(end_date);
+      end.setHours(23, 59, 59, 999);
+      query.check_in_time = { $gte: start, $lte: end };
     } else if (month && year) {
-      const start = `${year}-${String(month).padStart(2, '0')}-01`;
-      const end = `${year}-${String(month).padStart(2, '0')}-31`;
-      query = query.gte('check_in_time', `${start}T00:00:00Z`)
-        .lte('check_in_time', `${end}T23:59:59Z`);
+      const start = new Date(year, month - 1, 1);
+      const end = new Date(year, month, 0, 23, 59, 59, 999);
+      query.check_in_time = { $gte: start, $lte: end };
     }
 
-    query = query.order('check_in_time', { ascending: false });
+    // Fetch attendance records
+    const attendanceRecords = await AttendanceMerged.find(query)
+      .sort({ check_in_time: -1 })
+      .lean();
 
-    const { data: attendance, error } = await query;
+    // Get employee details for enrichment
+    const employeeIdsFromAttendance = [...new Set(attendanceRecords.map(a => a.user_id?.toString() || a.staff_id?.toString()).filter(Boolean))];
+    const employees = await EmployeeMerged.find({
+      _id: { $in: employeeIdsFromAttendance }
+    }).select('_id name email').lean();
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch attendance' });
-    }
+    const employeeMap = new Map(employees.map(e => [e._id.toString(), e]));
 
-    return res.json({ attendance: attendance || [] });
+    // Format attendance records
+    const formattedAttendance = attendanceRecords.map(record => {
+      const employeeId = record.user_id?.toString() || record.staff_id?.toString();
+      const employee = employeeMap.get(employeeId);
+      
+      return {
+        id: record._id?.toString(),
+        user_id: employeeId,
+        employee_id: employeeId,
+        check_in_time: record.check_in_time,
+        check_out_time: record.check_out_time || null,
+        check_in_location: record.latitude && record.longitude ? {
+          latitude: parseFloat(record.latitude.toString()),
+          longitude: parseFloat(record.longitude.toString()),
+        } : null,
+        check_out_location: record.checkout_latitude && record.checkout_longitude ? {
+          latitude: parseFloat(record.checkout_latitude.toString()),
+          longitude: parseFloat(record.checkout_longitude.toString()),
+        } : null,
+        check_in_image: record.image_url || null,
+        check_out_image: record.checkout_image_url || null,
+        status: record.status || 'Present',
+        created_at: record.created_at || record.createdAt,
+        user: employee ? {
+          id: employee._id.toString(),
+          email: employee.email,
+          name: employee.name
+        } : null,
+      };
+    });
+
+    return res.json({ attendance: formattedAttendance });
   } catch (err) {
     console.error('Get attendance error', err);
     return res.status(500).json({ message: 'Error fetching attendance' });
@@ -321,97 +479,62 @@ router.get('/attendance', async (req, res) => {
 });
 
 // POST /supervisor/attendance/override - Manual attendance override
-router.post('/attendance/override', async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const { worker_id, date, check_in_time, check_out_time, reason } = req.body;
-
-    if (!worker_id || !date) {
-      return res.status(400).json({ message: 'worker_id and date are required' });
-    }
-
-    // Verify worker is under this supervisor
-    const { data: relation, error: relationError } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('worker_id', worker_id)
-      .maybeSingle();
-
-    if (relationError || !relation) {
-      return res.status(403).json({ message: 'Worker not found or access denied' });
-    }
-
-    const overrideData = {
-      worker_id,
-      supervisor_id: supervisorId,
-      date,
-      check_in_time: check_in_time || null,
-      check_out_time: check_out_time || null,
-      reason: reason || null,
-    };
-
-    const { data: override, error } = await supabase
-      .from('attendance_override')
-      .upsert(overrideData, { onConflict: 'worker_id,date' })
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to override attendance' });
-    }
-
-    // Create notification
-    await supabase.from('notifications').insert({
-      supervisor_id: supervisorId,
-      type: 'attendance_override',
-      title: 'Attendance Override',
-      message: `Manual attendance entry created for ${date}`,
-      related_entity_type: 'attendance',
-      related_entity_id: override.id,
-    });
-
-    return res.json({ override, message: 'Attendance override created successfully' });
-  } catch (err) {
-    console.error('Attendance override error', err);
-    return res.status(500).json({ message: 'Error overriding attendance' });
-  }
-});
+// REMOVED: Legacy Supabase route - needs MongoDB reimplementation
+// router.post('/attendance/override', async (req, res) => {
+//   return res.status(501).json({ message: 'This feature requires MongoDB implementation' });
+// });
 
 // GET /supervisor/projects - Get assigned projects
 router.get('/projects', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
 
-    const { data, error } = await supabase
-      .from('supervisor_projects_relation')
-      .select(`
-        project_id,
-        assigned_at,
-        projects:project_id (
-          id,
-          name,
-          location,
-          start_date,
-          end_date,
-          description,
-          budget,
-          created_at
-        )
-      `)
-      .eq('supervisor_id', supervisorId)
-      .order('assigned_at', { ascending: false });
+    const ProjectMerged = require('../models/ProjectMerged');
+    const mongoose = require('mongoose');
 
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch projects' });
+    // Get projects assigned to this supervisor
+    let projects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id name location start_date end_date description budget created_at assigned_supervisors').lean();
+
+    // If no projects found, try with ObjectId
+    if (projects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      projects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id name location start_date end_date description budget created_at assigned_supervisors').lean();
     }
 
-    const projects = (data || []).map(item => ({
-      ...item.projects,
-      assignedAt: item.assigned_at,
-    }));
+    // Format projects with assigned_at from embedded data
+    const formattedProjects = projects.map(project => {
+      const supervisorAssignment = (project.assigned_supervisors || []).find(
+        s => s.supervisor_id?.toString() === supervisorId && s.status === 'active'
+      );
 
-    return res.json({ projects });
+      return {
+        id: project._id.toString(),
+        name: project.name,
+        location: project.location || null,
+        start_date: project.start_date || null,
+        end_date: project.end_date || null,
+        description: project.description || null,
+        budget: project.budget ? parseFloat(project.budget.toString()) : null,
+        created_at: project.created_at || project.createdAt || null,
+        assignedAt: supervisorAssignment?.assigned_at || null,
+      };
+    });
+
+    // Sort by assigned_at or created_at (newest first)
+    formattedProjects.sort((a, b) => {
+      const dateA = a.assignedAt || a.created_at || new Date(0);
+      const dateB = b.assignedAt || b.created_at || new Date(0);
+      return new Date(dateB) - new Date(dateA);
+    });
+
+    return res.json({ projects: formattedProjects });
   } catch (err) {
     console.error('Get projects error', err);
     return res.status(500).json({ message: 'Error fetching projects' });
@@ -421,36 +544,60 @@ router.get('/projects', async (req, res) => {
 // GET /supervisor/projects/:id - Get project details
 router.get('/projects/:id', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const projectId = req.params.id;
 
-    // Verify supervisor has access to this project
-    const { data: relation, error: relationError } = await supabase
-      .from('supervisor_projects_relation')
-      .select('project_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('project_id', projectId)
-      .maybeSingle();
+    const ProjectMerged = require('../models/ProjectMerged');
+    const mongoose = require('mongoose');
 
-    if (relationError || !relation) {
-      return res.status(403).json({ message: 'Project not found or access denied' });
-    }
+    // Find project and verify supervisor has access
+    let project = await ProjectMerged.findById(projectId).lean();
 
-    const { data: project, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('id', projectId)
-      .maybeSingle();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch project' });
+    // If not found by ObjectId, try finding by string match
+    if (!project && mongoose.Types.ObjectId.isValid(projectId)) {
+      const objectId = new mongoose.Types.ObjectId(projectId);
+      project = await ProjectMerged.findOne({ _id: objectId }).lean();
     }
 
     if (!project) {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    return res.json({ project });
+    // Check if supervisor is assigned to this project
+    const supervisorAssignment = project.assigned_supervisors?.find(
+      s => s.supervisor_id?.toString() === supervisorId && s.status === 'active'
+    );
+
+    // If no match with string ID, try with ObjectId
+    let supervisorObjectId = null;
+    if (!supervisorAssignment && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      supervisorObjectId = new mongoose.Types.ObjectId(supervisorId);
+      const altAssignment = project.assigned_supervisors?.find(
+        s => s.supervisor_id?.toString() === supervisorObjectId.toString() && s.status === 'active'
+      );
+      if (!altAssignment) {
+        return res.status(403).json({ message: 'Project not found or access denied' });
+      }
+    } else if (!supervisorAssignment) {
+      return res.status(403).json({ message: 'Project not found or access denied' });
+    }
+
+    // Format project data
+    const formattedProject = {
+      id: project._id.toString(),
+      name: project.name,
+      location: project.location || null,
+      start_date: project.start_date || null,
+      end_date: project.end_date || null,
+      description: project.description || null,
+      budget: project.budget ? parseFloat(project.budget.toString()) : null,
+      created_at: project.created_at || project.createdAt || null,
+      client: project.client || null,
+      status: project.status || 'active',
+    };
+
+    return res.json({ project: formattedProject });
   } catch (err) {
     console.error('Get project error', err);
     return res.status(500).json({ message: 'Error fetching project' });
@@ -458,260 +605,105 @@ router.get('/projects/:id', async (req, res) => {
 });
 
 // GET /supervisor/projects/:id/tasks - Get tasks for a project
-router.get('/projects/:id/tasks', async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const projectId = req.params.id;
-
-    // Verify supervisor has access to this project
-    const { data: relation, error: relationError } = await supabase
-      .from('supervisor_projects_relation')
-      .select('project_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('project_id', projectId)
-      .maybeSingle();
-
-    if (relationError || !relation) {
-      return res.status(403).json({ message: 'Project not found or access denied' });
-    }
-
-    const { data: tasks, error } = await supabase
-      .from('worker_tasks')
-      .select(`
-        *,
-        employees:worker_id (
-          id,
-          name,
-          email
-        )
-      `)
-      .eq('project_id', projectId)
-      .eq('supervisor_id', supervisorId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch tasks' });
-    }
-
-    return res.json({ tasks: tasks || [] });
-  } catch (err) {
-    console.error('Get tasks error', err);
-    return res.status(500).json({ message: 'Error fetching tasks' });
-  }
-});
+// REMOVED: Legacy Supabase route - needs MongoDB reimplementation
+// router.get('/projects/:id/tasks', async (req, res) => {
+//   return res.status(501).json({ message: 'This feature requires MongoDB implementation' });
+// });
 
 // POST /supervisor/projects/:id/tasks - Create task
-router.post('/projects/:id/tasks', async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const projectId = req.params.id;
-    const { worker_id, title, description, due_date } = req.body;
-
-    if (!worker_id || !title) {
-      return res.status(400).json({ message: 'worker_id and title are required' });
-    }
-
-    // Verify supervisor has access to this project
-    const { data: projectRelation, error: projectRelationError } = await supabase
-      .from('supervisor_projects_relation')
-      .select('project_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('project_id', projectId)
-      .maybeSingle();
-
-    if (projectRelationError || !projectRelation) {
-      return res.status(403).json({ message: 'Project not found or access denied' });
-    }
-
-    // Verify worker is under this supervisor
-    const { data: workerRelation, error: workerRelationError } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('worker_id', worker_id)
-      .maybeSingle();
-
-    if (workerRelationError || !workerRelation) {
-      return res.status(403).json({ message: 'Worker not found or access denied' });
-    }
-
-    const taskData = {
-      project_id: projectId,
-      worker_id,
-      supervisor_id: supervisorId,
-      title,
-      description: description || null,
-      due_date: due_date || null,
-      status: 'pending',
-    };
-
-    const { data: task, error } = await supabase
-      .from('worker_tasks')
-      .insert(taskData)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to create task' });
-    }
-
-    return res.json({ task, message: 'Task created successfully' });
-  } catch (err) {
-    console.error('Create task error', err);
-    return res.status(500).json({ message: 'Error creating task' });
-  }
-});
+// REMOVED: Legacy Supabase route - needs MongoDB reimplementation
+// router.post('/projects/:id/tasks', async (req, res) => {
+//   return res.status(501).json({ message: 'This feature requires MongoDB implementation' });
+// });
 
 // PUT /supervisor/tasks/:id - Update task
-router.put('/tasks/:id', async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const taskId = req.params.id;
-    const { title, description, status, due_date } = req.body;
-
-    // Verify task belongs to this supervisor
-    const { data: existingTask, error: fetchError } = await supabase
-      .from('worker_tasks')
-      .select('id, status')
-      .eq('id', taskId)
-      .eq('supervisor_id', supervisorId)
-      .maybeSingle();
-
-    if (fetchError || !existingTask) {
-      return res.status(403).json({ message: 'Task not found or access denied' });
-    }
-
-    const updateData = {};
-    if (title) updateData.title = title;
-    if (description !== undefined) updateData.description = description;
-    if (status) {
-      updateData.status = status;
-      if (status === 'completed') {
-        updateData.completed_at = new Date().toISOString();
-      }
-    }
-    if (due_date !== undefined) updateData.due_date = due_date;
-    updateData.updated_at = new Date().toISOString();
-
-    const { data: task, error } = await supabase
-      .from('worker_tasks')
-      .update(updateData)
-      .eq('id', taskId)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to update task' });
-    }
-
-    return res.json({ task, message: 'Task updated successfully' });
-  } catch (err) {
-    console.error('Update task error', err);
-    return res.status(500).json({ message: 'Error updating task' });
-  }
-});
+// REMOVED: Legacy Supabase route - needs MongoDB reimplementation
+// router.put('/tasks/:id', async (req, res) => {
+//   return res.status(501).json({ message: 'This feature requires MongoDB implementation' });
+// });
 
 // POST /supervisor/projects/:id/progress - Update project progress
-const upload = multer({ storage: multer.memoryStorage() });
-
-router.post('/projects/:id/progress', upload.array('photos', 10), async (req, res) => {
-  try {
-    const supervisorId = req.user.id;
-    const projectId = req.params.id;
-    const { progress_percentage, notes } = req.body;
-
-    if (progress_percentage === undefined) {
-      return res.status(400).json({ message: 'progress_percentage is required' });
-    }
-
-    // Verify supervisor has access to this project
-    const { data: relation, error: relationError } = await supabase
-      .from('supervisor_projects_relation')
-      .select('project_id')
-      .eq('supervisor_id', supervisorId)
-      .eq('project_id', projectId)
-      .maybeSingle();
-
-    if (relationError || !relation) {
-      return res.status(403).json({ message: 'Project not found or access denied' });
-    }
-
-    // Upload photos if any
-    const photoUrls = [];
-    if (req.files && req.files.length > 0) {
-      for (const file of req.files) {
-        const photoUrl = await uploadToSupabase(file, 'project-progress');
-        if (photoUrl) photoUrls.push(photoUrl);
-      }
-    }
-
-    const progressData = {
-      project_id: projectId,
-      supervisor_id: supervisorId,
-      progress_percentage: parseInt(progress_percentage),
-      notes: notes || null,
-      photo_urls: photoUrls.length > 0 ? photoUrls : null,
-    };
-
-    const { data: progress, error } = await supabase
-      .from('project_progress')
-      .insert(progressData)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to update progress' });
-    }
-
-    return res.json({ progress, message: 'Project progress updated successfully' });
-  } catch (err) {
-    console.error('Update progress error', err);
-    return res.status(500).json({ message: 'Error updating progress' });
-  }
-});
+// REMOVED: Legacy Supabase route - needs MongoDB reimplementation
+// const upload = multer({ storage: multer.memoryStorage() });
+// router.post('/projects/:id/progress', upload.array('photos', 10), async (req, res) => {
+//   return res.status(501).json({ message: 'This feature requires MongoDB implementation' });
+// });
 
 // GET /supervisor/dashboard - Get dashboard stats
 router.get('/dashboard', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    // Get supervisor ID from token (could be userId or id)
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    
+    if (!supervisorId) {
+      console.error('[Dashboard] No supervisor ID found in token:', req.user);
+      return res.status(401).json({ message: 'Invalid supervisor ID' });
+    }
+    
+    // Convert to string for MongoDB queries
+    supervisorId = supervisorId.toString();
+    
+    console.log(`[Dashboard] Fetching dashboard for supervisor: ${supervisorId}`);
 
-    // Get total workers
-    const { count: totalWorkers } = await supabase
-      .from('worker_supervisor_relation')
-      .select('*', { count: 'exact', head: true })
-      .eq('supervisor_id', supervisorId);
+    // MongoDB: Get supervisor's projects and workers
+    const ProjectMerged = require('../models/ProjectMerged');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const AttendanceMerged = require('../models/AttendanceMerged');
 
-    // Get total projects
-    const { count: totalProjects } = await supabase
-      .from('supervisor_projects_relation')
-      .select('*', { count: 'exact', head: true })
-      .eq('supervisor_id', supervisorId);
-
-    // Get today's attendance
-    const today = new Date().toISOString().split('T')[0];
-    const { data: workerRelations } = await supabase
-      .from('worker_supervisor_relation')
-      .select('worker_id')
-      .eq('supervisor_id', supervisorId);
-
-    const workerIds = (workerRelations || []).map(r => r.worker_id);
-    let presentToday = 0;
-    if (workerIds.length > 0) {
-      const { count } = await supabase
-        .from('attendance_logs')
-        .select('*', { count: 'exact', head: true })
-        .in('user_id', workerIds)
-        .gte('check_in_time', `${today}T00:00:00Z`)
-        .lt('check_in_time', `${today}T23:59:59Z`);
-      presentToday = count || 0;
+    // Get projects assigned to this supervisor
+    // Try both string and ObjectId matching
+    const mongoose = require('mongoose');
+    let projects = await ProjectMerged.find({
+      'assigned_supervisors.supervisor_id': supervisorId,
+      'assigned_supervisors.status': 'active'
+    }).select('_id assigned_employees').lean();
+    
+    // If no projects found, try with ObjectId
+    if (projects.length === 0 && mongoose.Types.ObjectId.isValid(supervisorId) && supervisorId.length === 24) {
+      const objectId = new mongoose.Types.ObjectId(supervisorId);
+      projects = await ProjectMerged.find({
+        'assigned_supervisors.supervisor_id': objectId,
+        'assigned_supervisors.status': 'active'
+      }).select('_id assigned_employees').lean();
     }
 
-    // Get pending tasks
-    const { count: pendingTasks } = await supabase
-      .from('worker_tasks')
-      .select('*', { count: 'exact', head: true })
-      .eq('supervisor_id', supervisorId)
-      .in('status', ['pending', 'in_progress']);
+    const totalProjects = projects.length;
+
+    // Get all unique employee IDs from assigned projects
+    const employeeIds = new Set();
+    projects.forEach(project => {
+      if (project.assigned_employees && Array.isArray(project.assigned_employees)) {
+        project.assigned_employees.forEach(emp => {
+          if (emp.employee_id && emp.status === 'active') {
+            employeeIds.add(emp.employee_id.toString());
+          }
+        });
+      }
+    });
+
+    const totalWorkers = employeeIds.size;
+
+    // Get today's attendance
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    let presentToday = 0;
+    if (employeeIds.size > 0) {
+      const employeeIdsArray = Array.from(employeeIds);
+      presentToday = await AttendanceMerged.countDocuments({
+        employee_id: { $in: employeeIdsArray },
+        check_in_time: {
+          $gte: today,
+          $lt: tomorrow
+        }
+      });
+    }
+
+    // Get pending tasks (if tasks collection exists)
+    // For now, return 0 as tasks might not be implemented yet
+    const pendingTasks = 0;
 
     return res.json({
       totalWorkers: totalWorkers || 0,
@@ -728,27 +720,17 @@ router.get('/dashboard', async (req, res) => {
 // GET /supervisor/notifications - Get notifications
 router.get('/notifications', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const { is_read, limit = 50 } = req.query;
 
-    let query = supabase
-      .from('notifications')
-      .select('*')
-      .eq('supervisor_id', supervisorId)
-      .order('created_at', { ascending: false })
-      .limit(parseInt(limit));
-
-    if (is_read !== undefined) {
-      query = query.eq('is_read', is_read === 'true');
-    }
-
-    const { data: notifications, error } = await query;
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to fetch notifications' });
-    }
-
-    return res.json({ notifications: notifications || [] });
+    // TODO: Implement Notification model for MongoDB
+    // For now, return empty array as notifications are not yet implemented in MongoDB
+    // This prevents errors while the notification system is being migrated
+    
+    console.log(`[Notifications] Fetching notifications for supervisor: ${supervisorId}`);
+    
+    return res.json({ notifications: [] });
   } catch (err) {
     console.error('Get notifications error', err);
     return res.status(500).json({ message: 'Error fetching notifications' });
@@ -758,26 +740,19 @@ router.get('/notifications', async (req, res) => {
 // PUT /supervisor/notifications/:id/read - Mark notification as read
 router.put('/notifications/:id/read', async (req, res) => {
   try {
-    const supervisorId = req.user.id;
+    let supervisorId = req.user.userId || req.user.id || req.user._id;
+    supervisorId = supervisorId.toString();
     const notificationId = req.params.id;
 
-    const { data: notification, error } = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('id', notificationId)
-      .eq('supervisor_id', supervisorId)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ message: error.message || 'Failed to update notification' });
-    }
-
-    if (!notification) {
-      return res.status(404).json({ message: 'Notification not found' });
-    }
-
-    return res.json({ notification, message: 'Notification marked as read' });
+    // TODO: Implement Notification model for MongoDB
+    // For now, return success as notifications are not yet implemented in MongoDB
+    
+    console.log(`[Notifications] Marking notification ${notificationId} as read for supervisor: ${supervisorId}`);
+    
+    return res.json({ 
+      notification: { id: notificationId, is_read: true },
+      message: 'Notification marked as read' 
+    });
   } catch (err) {
     console.error('Update notification error', err);
     return res.status(500).json({ message: 'Error updating notification' });

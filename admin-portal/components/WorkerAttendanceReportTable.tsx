@@ -11,6 +11,8 @@ import { Search, X } from 'lucide-react';
 interface WorkerAttendanceReportTableProps {
   workers: Employee[];
   lastEndDates: Record<string, string | null>;
+  projects?: any[];
+  projectAssignments?: Array<{ project_id: string; employee_id: string; employee_email: string | null; assignment_start_date: string | null; assignment_end_date: string | null }>;
   onInactiveFilterChange?: (days: number | null) => void;
   currentPage?: number;
   onPageChange?: (page: number) => void;
@@ -20,6 +22,8 @@ interface WorkerAttendanceReportTableProps {
 export default function WorkerAttendanceReportTable({
   workers,
   lastEndDates,
+  projects = [],
+  projectAssignments = [],
   onInactiveFilterChange,
   currentPage: externalCurrentPage,
   onPageChange: externalOnPageChange,
@@ -76,6 +80,39 @@ export default function WorkerAttendanceReportTable({
 
   const totalPages = Math.ceil(filteredWorkers.length / itemsPerPage);
 
+  // Create a mapping from employee_id to project_name
+  const employeeProjectMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    const projectMap: Record<string, any> = {};
+    
+    // Create project lookup map
+    projects.forEach((project: any) => {
+      projectMap[project.id] = project;
+    });
+    
+    // Get current date to check active assignments
+    const now = new Date();
+    
+    // Map employees to their active project assignments
+    projectAssignments.forEach((assignment: any) => {
+      const employeeId = assignment.employee_id;
+      const projectId = assignment.project_id;
+      
+      // Check if assignment is active
+      const isActive = !assignment.assignment_end_date || new Date(assignment.assignment_end_date) >= now;
+      
+      if (isActive && projectMap[projectId]) {
+        // If employee already has a project, keep the first one found
+        // (or you could prioritize by assignment_start_date)
+        if (!map[employeeId]) {
+          map[employeeId] = projectMap[projectId].name;
+        }
+      }
+    });
+    
+    return map;
+  }, [projects, projectAssignments]);
+
   const handleInactiveFilterChange = (days: number | null) => {
     setInactiveDays(days);
     onPageChange(1); // Reset to first page on filter change
@@ -120,7 +157,7 @@ export default function WorkerAttendanceReportTable({
       header: 'Project',
       render: (item: Employee) => (
         <span className="text-sm text-gray-900">
-          {item.projects?.name || 'Unassigned'}
+          {employeeProjectMap[item.id] || 'Unassigned'}
         </span>
       ),
     },

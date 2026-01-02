@@ -15,7 +15,9 @@ export default function ClientCard({ client, onToggleStatus, isToggling = false 
     e.preventDefault();
     e.stopPropagation();
     if (onToggleStatus && !isToggling) {
-      onToggleStatus(client.id, client.is_active !== false);
+      // Ensure we pass a proper boolean
+      const currentStatus = client.is_active === true;
+      onToggleStatus(client.id, currentStatus);
     }
   };
 
@@ -28,7 +30,7 @@ export default function ClientCard({ client, onToggleStatus, isToggling = false 
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="text-lg font-semibold text-gray-900">{client.name}</h3>
-            {client.is_active !== false ? (
+            {client.is_active === true ? (
               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                 Active
               </span>
@@ -43,13 +45,13 @@ export default function ClientCard({ client, onToggleStatus, isToggling = false 
                 onClick={handleToggleClick}
                 disabled={isToggling}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ml-2 ${
-                  client.is_active !== false ? 'bg-green-500' : 'bg-gray-300'
+                  client.is_active === true ? 'bg-green-500' : 'bg-gray-300'
                 } ${isToggling ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                title={`Click to make client ${client.is_active !== false ? 'inactive' : 'active'}`}
+                title={`Click to make client ${client.is_active === true ? 'inactive' : 'active'}`}
               >
                 <span
                   className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                    client.is_active !== false ? 'translate-x-5' : 'translate-x-0.5'
+                    client.is_active === true ? 'translate-x-5' : 'translate-x-0.5'
                   }`}
                 />
               </button>

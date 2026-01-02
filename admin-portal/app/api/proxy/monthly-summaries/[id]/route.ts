@@ -10,7 +10,7 @@ async function getAuthToken() {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
     const token = await getAuthToken();
@@ -18,7 +18,11 @@ export async function GET(
       return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
 
-    const url = `${API_BASE_URL}/api/monthly-summaries/${params.id}`;
+    // Handle both Promise and direct params (Next.js 13+ compatibility)
+    const resolvedParams = await Promise.resolve(params);
+    const summaryId = resolvedParams.id;
+
+    const url = `${API_BASE_URL}/api/monthly-summaries/${summaryId}`;
 
     const response = await fetch(url, {
       headers: {

@@ -50,6 +50,10 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
     try {
       // Fetch leave types (required)
       final leaveTypes = await ApiService().fetchLeaveTypes();
+      print('Loaded ${leaveTypes.length} leave types');
+      if (leaveTypes.isNotEmpty) {
+        print('Sample leave type: ${leaveTypes.first}');
+      }
       
       // Fetch employees for stand-in selector (optional)
       List<dynamic> employees = [];
@@ -62,8 +66,28 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
 
       if (mounted) {
         setState(() {
-          _leaveTypes = leaveTypes;
+          // Normalize leave types: ensure 'id' field exists (use '_id' if 'id' is missing)
+          _leaveTypes = leaveTypes.map((type) {
+            final Map<String, dynamic> normalized = Map<String, dynamic>.from(type);
+            // If 'id' doesn't exist but '_id' does, use '_id' as 'id'
+            if (!normalized.containsKey('id') && normalized.containsKey('_id')) {
+              normalized['id'] = normalized['_id'].toString();
+            } else if (normalized.containsKey('id')) {
+              normalized['id'] = normalized['id'].toString();
+            }
+            return normalized;
+          }).toList();
+          
           _employees = employees;
+          // Validate that selected leave type ID still exists in the list
+          if (_selectedLeaveTypeId != null) {
+            final exists = _leaveTypes.any((type) => 
+              type['id']?.toString() == _selectedLeaveTypeId?.toString()
+            );
+            if (!exists) {
+              _selectedLeaveTypeId = null;
+            }
+          }
           _isLoadingData = false;
         });
       }
@@ -98,11 +122,14 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
 
   String? _getLeaveTypeCode() {
     if (_selectedLeaveTypeId == null) return null;
-    final type = _leaveTypes.firstWhere(
-      (t) => t['id'] == _selectedLeaveTypeId,
-      orElse: () => null,
-    );
-    return type?['code'];
+    try {
+      final type = _leaveTypes.firstWhere(
+        (t) => t['id']?.toString() == _selectedLeaveTypeId?.toString(),
+      );
+      return type['code']?.toString();
+    } catch (e) {
+      return null;
+    }
   }
 
   bool get _isMCLeave => _getLeaveTypeCode() == 'SICK' || _getLeaveTypeCode() == 'MC';
@@ -229,7 +256,10 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                         ),
                         const SizedBox(height: 8),
                         DropdownButtonFormField<String>(
-                          value: _selectedLeaveTypeId,
+                          value: _selectedLeaveTypeId != null && 
+                                 _leaveTypes.any((type) => type['id']?.toString() == _selectedLeaveTypeId)
+                              ? _selectedLeaveTypeId
+                              : null,
                           decoration: InputDecoration(
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -238,28 +268,36 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                               horizontal: 16,
                               vertical: 12,
                             ),
+                            hintText: _leaveTypes.isEmpty 
+                                ? 'No leave types available' 
+                                : 'Select leave type',
                           ),
-                          items: _leaveTypes.map((type) {
+                          items: _leaveTypes
+                              .where((type) => type['id'] != null && type['id'].toString().isNotEmpty)
+                              .map((type) {
                             return DropdownMenuItem<String>(
-                              value: type['id'],
+                              value: type['id'].toString(),
                               child: Text(type['name'] ?? ''),
                             );
                           }).toList(),
-                          onChanged: (value) {
-                            setState(() {
-                              _selectedLeaveTypeId = value;
-                              // Clear MC document if switching away from MC
-                              if (!_isMCLeave) {
-                                _mcDocument = null;
-                              }
-                            });
-                          },
+                          onChanged: _leaveTypes.isEmpty 
+                              ? null 
+                              : (value) {
+                                  setState(() {
+                                    _selectedLeaveTypeId = value;
+                                    // Clear MC document if switching away from MC
+                                    if (!_isMCLeave) {
+                                      _mcDocument = null;
+                                    }
+                                  });
+                                },
                           validator: (value) {
                             if (value == null) {
                               return 'Please select a leave type';
                             }
                             return null;
                           },
+                          isExpanded: true,
                         ),
                         const SizedBox(height: 24),
 

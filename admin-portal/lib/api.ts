@@ -914,6 +914,17 @@ export const timesheetAPI = {
     if (!response.ok) throw { response: { status: response.status, data: responseData } };
     return responseData;
   },
+  bulkApprove: async (ids: string[]) => {
+    const response = await fetch('/api/proxy/timesheets/bulk/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+      credentials: 'include',
+    });
+    const responseData = await response.json();
+    if (!response.ok) throw { response: { status: response.status, data: responseData } };
+    return responseData;
+  },
   getStats: async (date?: string) => {
     const queryString = date ? `?date=${date}` : '';
     const response = await fetch(`/api/proxy/timesheets/stats${queryString}`, {

@@ -60,6 +60,8 @@ export default function ReportsPage() {
   const [leaveStats, setLeaveStats] = useState<any>(null);
   const [showLeaveSection, setShowLeaveSection] = useState(false);
   const [allWorkers, setAllWorkers] = useState<any[]>([]);
+  const [allProjects, setAllProjects] = useState<any[]>([]);
+  const [projectAssignments, setProjectAssignments] = useState<any[]>([]);
   const [projectReportsPage, setProjectReportsPage] = useState(1);
   const [workerReportsPage, setWorkerReportsPage] = useState(1);
   const [leaveRequestsPage, setLeaveRequestsPage] = useState(1);
@@ -162,6 +164,10 @@ export default function ReportsPage() {
       
       // Pass all workers to the component - let it handle filtering internally
       setAllWorkers(workers);
+      
+      // Store projects and assignments for worker attendance report
+      setAllProjects(projects);
+      setProjectAssignments(projectAssignments);
 
       // Set leave statistics
       setLeaveStats(leaveData.stats);
@@ -693,6 +699,8 @@ export default function ReportsPage() {
         <WorkerAttendanceReportTable
           workers={allWorkers}
           lastEndDates={lastEndDates}
+          projects={allProjects}
+          projectAssignments={projectAssignments}
           currentPage={workerReportsPage}
           onPageChange={setWorkerReportsPage}
           itemsPerPage={ITEMS_PER_PAGE}

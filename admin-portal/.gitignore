@@ -7,6 +7,10 @@
 
 # testing
 /coverage
+/playwright-report
+/test-results
+/tests/.auth/*.json
+!tests/.auth/.gitkeep
 
 # next.js
 /.next/

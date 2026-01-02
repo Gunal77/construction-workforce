@@ -43,6 +43,9 @@ export default function ClientLoginPage() {
         return;
       }
 
+      // Small delay to ensure cookie is set
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // Redirect to client dashboard on success
       router.push('/client/dashboard');
     } catch (err) {

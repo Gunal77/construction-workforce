@@ -181,7 +181,9 @@ export default function ClientsPage() {
   };
 
   const handleToggleStatus = async (clientId: string, currentStatus: boolean) => {
-    const newStatus = !currentStatus;
+    // Ensure we have a proper boolean
+    const currentStatusBool = currentStatus === true;
+    const newStatus = !currentStatusBool;
     const statusText = newStatus ? 'active' : 'inactive';
     
     if (!confirm(`Are you sure you want to make this client ${statusText}?`)) {
@@ -190,12 +192,15 @@ export default function ClientsPage() {
 
     try {
       setTogglingClientId(clientId);
+      console.log(`[TOGGLE] Client ${clientId}: ${currentStatusBool} -> ${newStatus}`);
       const result = await updateClientAction(clientId, { is_active: newStatus });
       
       if (result.success) {
+        console.log(`[TOGGLE] Success! Updated status to: ${result.data?.is_active}`);
         // Refresh the current page to get updated data
         fetchClients();
       } else {
+        console.error(`[TOGGLE] Failed:`, result.error);
         alert(result.error || 'Failed to update client status');
       }
     } catch (error: any) {
@@ -214,7 +219,7 @@ export default function ClientsPage() {
   // Calculate stats from current page data (approximate)
   const stats = {
     total: pagination.total,
-    active: clients.filter((c) => c.is_active !== false).length,
+    active: clients.filter((c) => c.is_active === true).length,
     inactive: clients.filter((c) => c.is_active === false).length,
   };
 

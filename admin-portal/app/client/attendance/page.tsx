@@ -331,17 +331,33 @@ export default function ClientAttendancePage() {
           return <span className="text-gray-400 text-xs">-</span>;
         }
         
+        // Helper to safely convert to number
+        const toNumber = (value: any): number | null => {
+          if (value == null) return null;
+          if (typeof value === 'number') return value;
+          if (typeof value === 'object' && 'toString' in value) {
+            return parseFloat(value.toString());
+          }
+          const num = parseFloat(value);
+          return isNaN(num) ? null : num;
+        };
+
+        const lat = toNumber(item.latitude);
+        const lng = toNumber(item.longitude);
+        const checkoutLat = toNumber(item.checkout_latitude);
+        const checkoutLng = toNumber(item.checkout_longitude);
+
         return (
           <div className="space-y-2">
             {/* Check-in Location */}
-            {hasCheckInLocation ? (
+            {hasCheckInLocation && lat != null && lng != null ? (
               <div className="space-y-0.5">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-medium text-gray-600">Check-in:</span>
-                  <span className="text-xs text-gray-500 font-mono">{item.latitude!.toFixed(6)}, {item.longitude!.toFixed(6)}</span>
+                  <span className="text-xs text-gray-500 font-mono">{lat.toFixed(6)}, {lng.toFixed(6)}</span>
                 </div>
                 <a
-                  href={`https://www.google.com/maps?q=${item.latitude},${item.longitude}`}
+                  href={`https://www.google.com/maps?q=${lat},${lng}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
@@ -358,14 +374,14 @@ export default function ClientAttendancePage() {
             )}
             
             {/* Check-out Location */}
-            {hasCheckoutLocation ? (
+            {hasCheckoutLocation && checkoutLat != null && checkoutLng != null ? (
               <div className="space-y-0.5 pt-1 border-t border-gray-100">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-medium text-gray-600">Check-out:</span>
-                  <span className="text-xs text-gray-500 font-mono">{item.checkout_latitude!.toFixed(6)}, {item.checkout_longitude!.toFixed(6)}</span>
+                  <span className="text-xs text-gray-500 font-mono">{checkoutLat.toFixed(6)}, {checkoutLng.toFixed(6)}</span>
                 </div>
                 <a
-                  href={`https://www.google.com/maps?q=${item.checkout_latitude},${item.checkout_longitude}`}
+                  href={`https://www.google.com/maps?q=${checkoutLat},${checkoutLng}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}

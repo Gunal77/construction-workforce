@@ -1,6 +1,8 @@
 const crypto = require('crypto');
-const db = require('../config/db');
 const { uploadAttendanceImage } = require('../services/uploadService');
+const attendanceRepository = require('../repositories/attendanceRepository');
+const Attendance = require('../models/AttendanceMerged');
+const User = require('../models/User');
 
 const parseCoordinate = (value) => {
   if (value === undefined || value === null || value === '') {
@@ -11,18 +13,19 @@ const parseCoordinate = (value) => {
 };
 
 const checkIn = async (req, res) => {
-  const userId = req.user.id;
+  const userId = req.user.userId;
 
   try {
-    const existing = await db.query(
-      `SELECT id FROM attendance_logs
-       WHERE user_id = $1 AND check_out_time IS NULL
-       ORDER BY check_in_time DESC
-       LIMIT 1`,
-      [userId],
-    );
+    console.log('Check-in request:', {
+      userId,
+      hasFile: !!req.file,
+      latitude: req.body.latitude,
+      longitude: req.body.longitude,
+    });
 
-    if (existing.rows.length) {
+    const existing = await attendanceRepository.findActiveByUserId(userId);
+
+    if (existing) {
       return res.status(400).json({ message: 'Active attendance session already exists' });
     }
 
@@ -34,45 +37,69 @@ const checkIn = async (req, res) => {
     const longitude = parseCoordinate(req.body.longitude ?? req.body.long ?? req.body.lng);
 
     if (latitude === null || longitude === null) {
-      return res.status(400).json({ message: 'Latitude and longitude are required' });
+      return res.status(400).json({ 
+        message: 'Latitude and longitude are required',
+        received: {
+          latitude: req.body.latitude ?? req.body.lat,
+          longitude: req.body.longitude ?? req.body.long ?? req.body.lng,
+        }
+      });
     }
 
+    console.log('Uploading image for user:', userId);
     const imageUrl = await uploadAttendanceImage(req.file, userId);
-    const attendanceId = crypto.randomUUID();
-    const checkInTime = new Date().toISOString();
+    console.log('Image uploaded successfully:', imageUrl);
 
-    const { rows } = await db.query(
-      `INSERT INTO attendance_logs
-        (id, user_id, check_in_time, image_url, latitude, longitude)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, user_id, check_in_time, image_url, latitude, longitude`,
-      [attendanceId, userId, checkInTime, imageUrl, latitude, longitude],
-    );
+    const attendanceId = crypto.randomUUID();
+    const checkInTime = new Date();
+    
+    // Set work_date to the date portion (start of day) of check_in_time
+    const workDate = new Date(checkInTime);
+    workDate.setHours(0, 0, 0, 0);
+
+    console.log('Creating attendance record:', {
+      id: attendanceId,
+      user_id: userId,
+      work_date: workDate.toISOString(),
+      check_in_time: checkInTime.toISOString(),
+      image_url: imageUrl,
+      latitude,
+      longitude,
+    });
+
+    const attendance = await attendanceRepository.create({
+      id: attendanceId,
+      user_id: userId,
+      work_date: workDate.toISOString(),
+      check_in_time: checkInTime.toISOString(),
+      image_url: imageUrl,
+      latitude,
+      longitude,
+    });
+
+    console.log('Attendance record created successfully:', attendance?.id);
 
     return res.status(201).json({
       message: 'Check-in successful',
-      attendance: rows[0],
+      attendance,
     });
   } catch (error) {
-    console.error('Check-in error', error);
-    return res.status(500).json({ message: 'Failed to check in' });
+    console.error('Check-in error:', error);
+    console.error('Error stack:', error.stack);
+    return res.status(500).json({ 
+      message: 'Failed to check in',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };
 
 const checkOut = async (req, res) => {
-  const userId = req.user.id;
+  const userId = req.user.userId;
 
   try {
-    const { rows } = await db.query(
-      `SELECT id, check_in_time
-         FROM attendance_logs
-        WHERE user_id = $1 AND check_out_time IS NULL
-        ORDER BY check_in_time DESC
-        LIMIT 1`,
-      [userId],
-    );
+    const existing = await attendanceRepository.findActiveByUserId(userId);
 
-    if (!rows.length) {
+    if (!existing) {
       return res.status(400).json({ message: 'No active attendance session found' });
     }
 
@@ -87,54 +114,25 @@ const checkOut = async (req, res) => {
       return res.status(400).json({ message: 'Latitude and longitude are required' });
     }
 
-    const attendanceId = rows[0].id;
+    const attendanceId = existing.id;
     const checkOutTime = new Date().toISOString();
     const checkoutImageUrl = await uploadAttendanceImage(req.file, userId);
 
-    // Try to update with new checkout columns first (if migration has been run)
-    try {
-      const result = await db.query(
-        `UPDATE attendance_logs
-            SET check_out_time = $1,
-                checkout_image_url = $2,
-                checkout_latitude = $3,
-                checkout_longitude = $4
-          WHERE id = $5
-          RETURNING id, user_id, check_in_time, check_out_time, image_url, latitude, longitude, checkout_image_url, checkout_latitude, checkout_longitude`,
-        [checkOutTime, checkoutImageUrl, latitude, longitude, attendanceId],
-      );
+    const attendance = await attendanceRepository.update(attendanceId, {
+      check_out_time: checkOutTime,
+      checkout_image_url: checkoutImageUrl,
+      checkout_latitude: latitude,
+      checkout_longitude: longitude,
+    });
 
-      return res.json({
-        message: 'Check-out successful',
-        attendance: result.rows[0],
-      });
-    } catch (columnError) {
-      // If new columns don't exist yet (migration not run), fall back to old query
-      if (columnError.code === '42703') { // PostgreSQL error code for undefined column
-        console.log('New checkout columns not found, using backward compatible checkout');
-        const result = await db.query(
-          `UPDATE attendance_logs
-              SET check_out_time = $1
-            WHERE id = $2
-            RETURNING id, user_id, check_in_time, check_out_time, image_url, latitude, longitude`,
-          [checkOutTime, attendanceId],
-        );
-
-        // Add null values for checkout fields to maintain API compatibility
-        const attendance = {
-          ...result.rows[0],
-          checkout_image_url: null,
-          checkout_latitude: null,
-          checkout_longitude: null,
-        };
-
-        return res.json({
-          message: 'Check-out successful',
-          attendance,
-        });
-      }
-      throw columnError; // Re-throw if it's a different error
+    if (!attendance) {
+      return res.status(404).json({ message: 'Attendance record not found' });
     }
+
+    return res.json({
+      message: 'Check-out successful',
+      attendance,
+    });
   } catch (error) {
     console.error('Check-out error', error);
     return res.status(500).json({ 
@@ -145,44 +143,11 @@ const checkOut = async (req, res) => {
 };
 
 const getMyAttendance = async (req, res) => {
-  const userId = req.user.id;
+  const userId = req.user.userId;
 
   try {
-    // First, try to query with new checkout columns (if migration has been run)
-    try {
-      const { rows } = await db.query(
-        `SELECT id, user_id, check_in_time, check_out_time, image_url, latitude, longitude, checkout_image_url, checkout_latitude, checkout_longitude
-           FROM attendance_logs
-          WHERE user_id = $1
-          ORDER BY check_in_time DESC`,
-        [userId],
-      );
-
-      return res.json({ records: rows });
-    } catch (columnError) {
-      // If new columns don't exist yet (migration not run), fall back to old query
-      if (columnError.code === '42703') { // PostgreSQL error code for undefined column
-        console.log('New checkout columns not found, using backward compatible query');
-        const { rows } = await db.query(
-          `SELECT id, user_id, check_in_time, check_out_time, image_url, latitude, longitude
-             FROM attendance_logs
-            WHERE user_id = $1
-            ORDER BY check_in_time DESC`,
-          [userId],
-        );
-
-        // Add null values for checkout fields to maintain API compatibility
-        const recordsWithCheckout = rows.map(row => ({
-          ...row,
-          checkout_image_url: null,
-          checkout_latitude: null,
-          checkout_longitude: null,
-        }));
-
-        return res.json({ records: recordsWithCheckout });
-      }
-      throw columnError; // Re-throw if it's a different error
-    }
+    const records = await attendanceRepository.findByUserId(userId, { orderBy: 'check_in_time desc' });
+    return res.json({ records });
   } catch (error) {
     console.error('Get attendance error', error);
     return res.status(500).json({ message: 'Failed to fetch attendance records' });
@@ -249,93 +214,99 @@ const buildAdminFilters = (query) => {
 const getAllAttendance = async (req, res) => {
   try {
     const { sortBy = 'check_in_time', sortOrder = 'desc' } = req.query;
-    const { conditions, values } = buildAdminFilters(req.query);
 
-    const orderColumn =
-      sortBy === 'user'
-        ? 'u.email'
-        : sortBy === 'check_out_time'
-          ? 'al.check_out_time'
-          : 'al.check_in_time';
-    const normalizedSortOrder = sortOrder?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    // Add LIMIT for dashboard queries to improve performance
-    // If no date filter, limit to last 30 days for dashboard performance
-    const hasDateFilter = req.query.date || req.query.from || req.query.to || req.query.month || req.query.year;
-    const limitClause = hasDateFilter ? '' : 'LIMIT 1000'; // Limit to 1000 records if no date filter
-
-    // Try to query with new checkout columns first (if migration has been run)
-    try {
-      const query = `
-        SELECT
-          al.id,
-          al.user_id,
-          al.check_in_time,
-          al.check_out_time,
-          al.image_url,
-          al.latitude,
-          al.longitude,
-          al.checkout_image_url,
-          al.checkout_latitude,
-          al.checkout_longitude,
-          u.email AS user_email
-        FROM attendance_logs al
-        LEFT JOIN users u ON u.id = al.user_id
-        ${whereClause}
-        ORDER BY ${orderColumn} ${normalizedSortOrder}, al.created_at ${normalizedSortOrder}
-        ${limitClause}
-      `;
-
-      const { rows } = await db.query(query, values);
+    // MongoDB implementation
+    const query = {};
       
-      // Log how many records have checkout data
-      const recordsWithCheckout = rows.filter(r => 
-        r.checkout_image_url || r.checkout_latitude != null || r.checkout_longitude != null
-      );
-      if (recordsWithCheckout.length > 0) {
-        console.log(`[getAllAttendance] Found ${recordsWithCheckout.length} records with checkout data out of ${rows.length} total`);
+      // Build MongoDB query filters
+      if (req.query.user) {
+        // Find user by email first
+        const user = await User.findOne({ email: req.query.user.trim().toLowerCase() }).select('_id');
+        if (user) {
+          query.user_id = user._id;
+        } else {
+          // No user found, return empty result
+          return res.json({ records: [] });
+        }
       }
 
-      return res.json({ records: rows });
-    } catch (columnError) {
-      // If new columns don't exist yet (migration not run), fall back to old query
-      if (columnError.code === '42703') { // PostgreSQL error code for undefined column
-        console.log('⚠️  [getAllAttendance] New checkout columns not found, using backward compatible query');
-        console.log('   Error:', columnError.message);
-        console.log('   Please run migration 024_add_checkout_image_location.sql');
-        const query = `
-          SELECT
-            al.id,
-            al.user_id,
-            al.check_in_time,
-            al.check_out_time,
-            al.image_url,
-            al.latitude,
-            al.longitude,
-            u.email AS user_email
-          FROM attendance_logs al
-          LEFT JOIN users u ON u.id = al.user_id
-          ${whereClause}
-          ORDER BY ${orderColumn} ${normalizedSortOrder}, al.created_at ${normalizedSortOrder}
-          ${limitClause}
-        `;
-
-        const { rows } = await db.query(query, values);
-
-        // Add null values for checkout fields to maintain API compatibility
-        const recordsWithCheckout = rows.map(row => ({
-          ...row,
-          checkout_image_url: null,
-          checkout_latitude: null,
-          checkout_longitude: null,
-        }));
-
-        return res.json({ records: recordsWithCheckout });
+      // Handle date range (from/to)
+      if (req.query.from && req.query.to) {
+        const fromDate = new Date(req.query.from);
+        const toDate = new Date(req.query.to);
+        if (!Number.isNaN(fromDate.getTime()) && !Number.isNaN(toDate.getTime())) {
+          // Set to start of day for 'from' and end of day for 'to'
+          fromDate.setHours(0, 0, 0, 0);
+          toDate.setHours(23, 59, 59, 999);
+          query.check_in_time = { $gte: fromDate, $lte: toDate };
+        }
+      } else if (req.query.date) {
+        // Single date filter
+        const selectedDate = new Date(req.query.date);
+        if (!Number.isNaN(selectedDate.getTime())) {
+          const startOfDay = new Date(selectedDate);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(selectedDate);
+          endOfDay.setHours(23, 59, 59, 999);
+          query.check_in_time = { $gte: startOfDay, $lte: endOfDay };
+        }
       }
-      throw columnError; // Re-throw if it's a different error
-    }
+
+      // Handle month filter
+      if (req.query.month) {
+        const monthValue = Number.parseInt(req.query.month, 10);
+        if (!Number.isNaN(monthValue)) {
+          const year = req.query.year ? Number.parseInt(req.query.year, 10) : new Date().getFullYear();
+          const startDate = new Date(year, monthValue - 1, 1);
+          const endDate = new Date(year, monthValue, 0, 23, 59, 59, 999);
+          query.check_in_time = { $gte: startDate, $lte: endDate };
+        }
+      } else if (req.query.year) {
+        // Year only filter
+        const yearValue = Number.parseInt(req.query.year, 10);
+        if (!Number.isNaN(yearValue)) {
+          const startDate = new Date(yearValue, 0, 1);
+          const endDate = new Date(yearValue, 11, 31, 23, 59, 59, 999);
+          query.check_in_time = { $gte: startDate, $lte: endDate };
+        }
+      }
+
+      // Build sort object
+      let sortObj = {};
+      if (sortBy === 'check_out_time') {
+        sortObj.check_out_time = sortOrder === 'asc' ? 1 : -1;
+      } else if (sortBy === 'user') {
+        sortObj.user_id = sortOrder === 'asc' ? 1 : -1;
+      } else {
+        sortObj.check_in_time = sortOrder === 'asc' ? 1 : -1;
+      }
+      // Secondary sort by created_at
+      sortObj.created_at = sortOrder === 'asc' ? 1 : -1;
+
+      // Add LIMIT for dashboard queries
+      const hasDateFilter = req.query.date || req.query.from || req.query.to || req.query.month || req.query.year;
+      const limit = hasDateFilter ? null : 1000; // Limit to 1000 records if no date filter
+
+      // Fetch attendance records
+      let attendanceQuery = Attendance.find(query).sort(sortObj);
+      if (limit) {
+        attendanceQuery = attendanceQuery.limit(limit);
+      }
+      const attendanceRecords = await attendanceQuery.exec();
+
+      // Fetch user emails in batch
+      const userIds = [...new Set(attendanceRecords.map(r => r.user_id))];
+      const users = await User.find({ _id: { $in: userIds } }).select('_id email').lean();
+      const userEmailMap = new Map(users.map(u => [u._id, u.email]));
+
+      // Map records and add user_email
+      const records = attendanceRecords.map(record => {
+        const recordJson = record.toJSON();
+        recordJson.user_email = userEmailMap.get(record.user_id) || null;
+        return recordJson;
+      });
+
+      return res.json({ records });
   } catch (error) {
     console.error('Admin fetch attendance error', error);
     return res.status(500).json({ message: 'Failed to fetch attendance records' });
@@ -345,54 +316,95 @@ const getAllAttendance = async (req, res) => {
 const getLastEndDates = async (req, res) => {
   try {
     const { employeeIds, inactiveDays } = req.query;
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const User = require('../models/User');
+    const Attendance = require('../models/AttendanceMerged');
+    const mongoose = require('mongoose');
     
-    let query = `
-      SELECT 
-        e.id AS employee_id,
-        e.name AS employee_name,
-        e.email AS employee_email,
-        MAX(al.check_out_time) AS last_end_date
-      FROM employees e
-      LEFT JOIN users u ON u.email = e.email
-      LEFT JOIN attendance_logs al ON al.user_id = u.id AND al.check_out_time IS NOT NULL
-    `;
-    
-    const conditions = [];
-    const values = [];
-    let paramIndex = 1;
-    
+    // Build employee filter
+    let employeeFilter = {};
     if (employeeIds) {
       const ids = Array.isArray(employeeIds) ? employeeIds : employeeIds.split(',');
-      conditions.push(`e.id = ANY($${paramIndex})`);
-      values.push(ids);
-      paramIndex += 1;
+      // Convert to ObjectIds if valid
+      const objectIds = ids.map(id => {
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          return new mongoose.Types.ObjectId(id);
+        }
+        return id;
+      });
+      employeeFilter._id = { $in: objectIds };
     }
     
+    // Get all employees
+    const employees = await EmployeeMerged.find(employeeFilter)
+      .select('_id name email user_id')
+      .lean();
+    
+    // Get user IDs from employees
+    const userIds = employees
+      .map(emp => emp.user_id)
+      .filter(Boolean);
+    
+    // Get all attendance records with check_out_time for these users
+    const attendanceRecords = await Attendance.find({
+      user_id: { $in: userIds },
+      check_out_time: { $ne: null }
+    })
+      .select('user_id check_out_time')
+      .sort({ check_out_time: -1 })
+      .lean();
+    
+    // Group by user_id and get max check_out_time
+    const lastEndDatesMap = new Map();
+    attendanceRecords.forEach(record => {
+      const userId = record.user_id?.toString();
+      if (userId) {
+        const currentMax = lastEndDatesMap.get(userId);
+        if (!currentMax || new Date(record.check_out_time) > new Date(currentMax)) {
+          lastEndDatesMap.set(userId, record.check_out_time);
+        }
+      }
+    });
+    
+    // Build result array
+    const results = employees.map(employee => {
+      const userId = employee.user_id?.toString();
+      const lastEndDate = userId ? lastEndDatesMap.get(userId) : null;
+      
+      return {
+        employee_id: employee._id.toString(),
+        employee_name: employee.name,
+        employee_email: employee.email,
+        last_end_date: lastEndDate ? new Date(lastEndDate).toISOString() : null,
+      };
+    });
+    
+    // Filter by inactiveDays if provided
+    let filteredResults = results;
     if (inactiveDays) {
       const days = parseInt(inactiveDays, 10);
       if (!isNaN(days)) {
-        conditions.push(`(MAX(al.check_out_time) IS NULL OR MAX(al.check_out_time) < CURRENT_DATE - INTERVAL '${days} days')`);
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - days);
+        
+        filteredResults = results.filter(result => {
+          if (!result.last_end_date) {
+            return true; // Include employees with no attendance
+          }
+          return new Date(result.last_end_date) < cutoffDate;
+        });
       }
     }
     
-    query += ` GROUP BY e.id, e.name, e.email`;
+    // Sort by last_end_date DESC, NULLS LAST
+    filteredResults.sort((a, b) => {
+      if (!a.last_end_date && !b.last_end_date) return 0;
+      if (!a.last_end_date) return 1; // NULL goes last
+      if (!b.last_end_date) return -1; // NULL goes last
+      return new Date(b.last_end_date) - new Date(a.last_end_date);
+    });
     
-    if (conditions.length > 0) {
-      // For inactiveDays filter, we need HAVING clause
-      if (inactiveDays) {
-        query += ` HAVING (MAX(al.check_out_time) IS NULL OR MAX(al.check_out_time) < CURRENT_DATE - INTERVAL '${inactiveDays} days')`;
-      }
-      // For employeeIds, we need WHERE clause
-      if (employeeIds) {
-        query = query.replace('GROUP BY', `WHERE ${conditions[0]} GROUP BY`);
-      }
-    }
-    
-    query += ` ORDER BY last_end_date DESC NULLS LAST`;
-    
-    const { rows } = await db.query(query, values);
-    
-    return res.json({ lastEndDates: rows });
+    return res.json({ lastEndDates: filteredResults });
   } catch (error) {
     console.error('Get last end dates error', error);
     return res.status(500).json({ message: 'Failed to fetch last end dates' });

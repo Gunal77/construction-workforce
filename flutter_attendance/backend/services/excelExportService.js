@@ -1,36 +1,140 @@
 const ExcelJS = require('exceljs');
-const db = require('../config/db');
 
 /**
  * Generate Excel for Monthly Summary
  */
 async function generateMonthlySummaryExcel(summaryId) {
   try {
-    // Fetch summary with all related data
-    const result = await db.query(
-      `SELECT 
-        ms.*,
-        e.name as employee_name,
-        e.email as employee_email,
-        e.role as employee_role,
-        a.name as admin_name,
-        a.email as admin_email,
-        p.name as project_name,
-        c.name as client_name
-      FROM monthly_summaries ms
-      LEFT JOIN employees e ON e.id = ms.employee_id
-      LEFT JOIN admins a ON a.id = ms.admin_approved_by
-      LEFT JOIN projects p ON p.id = e.project_id
-      LEFT JOIN users c ON c.id = p.client_user_id
-      WHERE ms.id = $1 AND ms.status = 'APPROVED'`,
-      [summaryId]
-    );
+    let summary;
 
-    if (result.rows.length === 0) {
-      throw new Error('Monthly summary not found or not approved');
-    }
+    // MongoDB: Fetch summary using Mongoose models
+    const mongoose = require('mongoose');
+      const MonthlySummary = require('../models/MonthlySummary');
+      const EmployeeMerged = require('../models/EmployeeMerged');
+      const User = require('../models/User');
+      const ProjectMerged = require('../models/ProjectMerged');
 
-    const summary = result.rows[0];
+      // Try multiple ID formats since MongoDB might store _id as ObjectId or String
+      let summaryDoc = null;
+
+      // Method 1: Try with ObjectId
+      if (mongoose.Types.ObjectId.isValid(summaryId)) {
+        const objectId = new mongoose.Types.ObjectId(summaryId);
+        summaryDoc = await MonthlySummary.findOne({ _id: objectId }).lean();
+      }
+
+      // Method 2: Try with string ID
+      if (!summaryDoc) {
+        summaryDoc = await MonthlySummary.findOne({ _id: summaryId }).lean();
+      }
+
+      // Method 3: Try with native collection (bypasses Mongoose type conversion)
+      if (!summaryDoc && mongoose.Types.ObjectId.isValid(summaryId)) {
+        const objectId = new mongoose.Types.ObjectId(summaryId);
+        summaryDoc = await MonthlySummary.collection.findOne({ _id: objectId });
+        if (summaryDoc) {
+          // Convert to plain object
+          summaryDoc = JSON.parse(JSON.stringify(summaryDoc));
+        }
+      }
+
+      // Method 4: Try finding by string ID in native collection
+      if (!summaryDoc) {
+        const allSummaries = await MonthlySummary.collection.find({}).toArray();
+        summaryDoc = allSummaries.find(s => s._id.toString() === summaryId);
+        if (summaryDoc) {
+          summaryDoc = JSON.parse(JSON.stringify(summaryDoc));
+        }
+      }
+
+      if (!summaryDoc) {
+        console.error(`[ERROR] Summary not found with ID: ${summaryId}`);
+        throw new Error('Monthly summary not found');
+      }
+
+      // Log status but don't block export (admin can export any status)
+      console.log(`[INFO] Exporting summary with status: ${summaryDoc.status}`);
+
+      // Get employee - handle both ObjectId and string formats
+      let employee = null;
+      if (summaryDoc.employee_id) {
+        if (mongoose.Types.ObjectId.isValid(summaryDoc.employee_id)) {
+          employee = await EmployeeMerged.findById(summaryDoc.employee_id).lean();
+        }
+        if (!employee) {
+          employee = await EmployeeMerged.findOne({ _id: summaryDoc.employee_id }).lean();
+        }
+        if (!employee) {
+          // Try with native collection
+          const employeeDoc = await EmployeeMerged.collection.findOne({
+            _id: mongoose.Types.ObjectId.isValid(summaryDoc.employee_id) 
+              ? new mongoose.Types.ObjectId(summaryDoc.employee_id)
+              : summaryDoc.employee_id
+          });
+          if (employeeDoc) {
+            employee = JSON.parse(JSON.stringify(employeeDoc));
+          }
+        }
+      }
+      
+      // Get admin - handle both ObjectId and string formats
+      let admin = null;
+      if (summaryDoc.admin_approved_by) {
+        if (mongoose.Types.ObjectId.isValid(summaryDoc.admin_approved_by)) {
+          admin = await User.findById(summaryDoc.admin_approved_by).lean();
+        }
+        if (!admin) {
+          admin = await User.findOne({ _id: summaryDoc.admin_approved_by }).lean();
+        }
+      }
+
+      // Get project (from employee's project assignments)
+      let project = null;
+      let client = null;
+      if (employee?.project_assignments && employee.project_assignments.length > 0) {
+        const projectId = employee.project_assignments[0].project_id;
+        if (mongoose.Types.ObjectId.isValid(projectId)) {
+          project = await ProjectMerged.findById(projectId).lean();
+        }
+        if (!project) {
+          project = await ProjectMerged.findOne({ _id: projectId }).lean();
+        }
+        if (project?.client_user_id) {
+          if (mongoose.Types.ObjectId.isValid(project.client_user_id)) {
+            client = await User.findById(project.client_user_id).lean();
+          }
+          if (!client) {
+            client = await User.findOne({ _id: project.client_user_id }).lean();
+          }
+        }
+      }
+
+      // Format summary to match PostgreSQL structure
+      summary = {
+        id: summaryDoc._id.toString(),
+        employee_id: summaryDoc.employee_id,
+        month: summaryDoc.month,
+        year: summaryDoc.year,
+        total_working_days: summaryDoc.total_working_days || 0,
+        total_worked_hours: summaryDoc.total_worked_hours ? parseFloat(summaryDoc.total_worked_hours.toString()) : 0,
+        total_ot_hours: summaryDoc.total_ot_hours ? parseFloat(summaryDoc.total_ot_hours.toString()) : 0,
+        approved_leaves: summaryDoc.approved_leaves ? parseFloat(summaryDoc.approved_leaves.toString()) : 0,
+        absent_days: summaryDoc.absent_days || 0,
+        project_breakdown: summaryDoc.project_breakdown || [],
+        subtotal: summaryDoc.subtotal ? parseFloat(summaryDoc.subtotal.toString()) : 0,
+        tax_percentage: summaryDoc.tax_percentage || 0,
+        tax_amount: summaryDoc.tax_amount ? parseFloat(summaryDoc.tax_amount.toString()) : 0,
+        total_amount: summaryDoc.total_amount ? parseFloat(summaryDoc.total_amount.toString()) : 0,
+        invoice_number: summaryDoc.invoice_number,
+        status: summaryDoc.status,
+        employee_name: employee?.name || 'Unknown',
+        employee_email: employee?.email || null,
+        employee_role: employee?.role || null,
+        admin_name: admin?.name || null,
+        admin_email: admin?.email || null,
+        project_name: project?.name || null,
+        client_name: client?.name || null,
+      };
     
     // Parse project_breakdown JSON
     let projectBreakdown = [];
@@ -448,8 +552,236 @@ async function generateTimesheetReportExcel(timesheets, filters = {}) {
   }
 }
 
+/**
+ * Generate Excel for Multiple Monthly Summaries (Bulk Export)
+ */
+async function generateBulkMonthlySummariesExcel(summaryIds) {
+  try {
+    const mongoose = require('mongoose');
+    const MonthlySummary = require('../models/MonthlySummary');
+    const EmployeeMerged = require('../models/EmployeeMerged');
+    const User = require('../models/User');
+    const ProjectMerged = require('../models/ProjectMerged');
+
+    // Fetch all summaries
+    const summaries = [];
+    for (const summaryId of summaryIds) {
+      let summaryDoc = null;
+
+      // Try multiple ID formats
+      if (mongoose.Types.ObjectId.isValid(summaryId)) {
+        const objectId = new mongoose.Types.ObjectId(summaryId);
+        summaryDoc = await MonthlySummary.findOne({ _id: objectId }).lean();
+      }
+
+      if (!summaryDoc) {
+        summaryDoc = await MonthlySummary.findOne({ _id: summaryId }).lean();
+      }
+
+      if (!summaryDoc && mongoose.Types.ObjectId.isValid(summaryId)) {
+        const objectId = new mongoose.Types.ObjectId(summaryId);
+        summaryDoc = await MonthlySummary.collection.findOne({ _id: objectId });
+        if (summaryDoc) {
+          summaryDoc = JSON.parse(JSON.stringify(summaryDoc));
+        }
+      }
+
+      if (!summaryDoc) {
+        const allSummaries = await MonthlySummary.collection.find({}).toArray();
+        summaryDoc = allSummaries.find(s => s._id.toString() === summaryId);
+        if (summaryDoc) {
+          summaryDoc = JSON.parse(JSON.stringify(summaryDoc));
+        }
+      }
+
+      if (summaryDoc) {
+        // Get employee details
+        let employee = null;
+        if (summaryDoc.employee_id) {
+          if (mongoose.Types.ObjectId.isValid(summaryDoc.employee_id)) {
+            const employeeObjectId = new mongoose.Types.ObjectId(summaryDoc.employee_id);
+            employee = await EmployeeMerged.findById(employeeObjectId).lean();
+          }
+          if (!employee) {
+            employee = await EmployeeMerged.findOne({ _id: summaryDoc.employee_id.toString() }).lean();
+          }
+        }
+
+        // Get admin details
+        let admin = null;
+        if (summaryDoc.admin_approved_by) {
+          if (mongoose.Types.ObjectId.isValid(summaryDoc.admin_approved_by)) {
+            admin = await User.findById(summaryDoc.admin_approved_by).lean();
+          }
+          if (!admin) {
+            admin = await User.findOne({ _id: summaryDoc.admin_approved_by }).lean();
+          }
+        }
+
+        // Get project details
+        let project = null;
+        let client = null;
+        if (employee?.project_assignments && employee.project_assignments.length > 0) {
+          const projectId = employee.project_assignments[0].project_id;
+          if (mongoose.Types.ObjectId.isValid(projectId)) {
+            project = await ProjectMerged.findById(projectId).lean();
+          }
+          if (!project) {
+            project = await ProjectMerged.findOne({ _id: projectId }).lean();
+          }
+          if (project?.client_user_id) {
+            if (mongoose.Types.ObjectId.isValid(project.client_user_id)) {
+              client = await User.findById(project.client_user_id).lean();
+            }
+            if (!client) {
+              client = await User.findOne({ _id: project.client_user_id }).lean();
+            }
+          }
+        }
+
+        // Parse project_breakdown
+        let projectBreakdown = [];
+        if (summaryDoc.project_breakdown) {
+          try {
+            if (typeof summaryDoc.project_breakdown === 'string') {
+              projectBreakdown = JSON.parse(summaryDoc.project_breakdown);
+            } else if (Array.isArray(summaryDoc.project_breakdown)) {
+              projectBreakdown = summaryDoc.project_breakdown;
+            }
+          } catch (e) {
+            console.error('Error parsing project_breakdown:', e);
+          }
+        }
+
+        summaries.push({
+          id: summaryDoc._id.toString(),
+          employee_id: summaryDoc.employee_id,
+          month: summaryDoc.month,
+          year: summaryDoc.year,
+          total_working_days: summaryDoc.total_working_days || 0,
+          total_worked_hours: summaryDoc.total_worked_hours ? parseFloat(summaryDoc.total_worked_hours.toString()) : 0,
+          total_ot_hours: summaryDoc.total_ot_hours ? parseFloat(summaryDoc.total_ot_hours.toString()) : 0,
+          approved_leaves: summaryDoc.approved_leaves ? parseFloat(summaryDoc.approved_leaves.toString()) : 0,
+          absent_days: summaryDoc.absent_days || 0,
+          project_breakdown: projectBreakdown,
+          subtotal: summaryDoc.subtotal ? parseFloat(summaryDoc.subtotal.toString()) : 0,
+          tax_percentage: summaryDoc.tax_percentage || 0,
+          tax_amount: summaryDoc.tax_amount ? parseFloat(summaryDoc.tax_amount.toString()) : 0,
+          total_amount: summaryDoc.total_amount ? parseFloat(summaryDoc.total_amount.toString()) : 0,
+          invoice_number: summaryDoc.invoice_number,
+          status: summaryDoc.status,
+          employee_name: employee?.name || 'Unknown',
+          employee_email: employee?.email || null,
+          employee_role: employee?.role || null,
+          admin_name: admin?.name || null,
+          admin_email: admin?.email || null,
+          project_name: project?.name || null,
+          client_name: client?.name || null,
+        });
+      }
+    }
+
+    if (summaries.length === 0) {
+      throw new Error('No summaries found to export');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Monthly Summaries');
+
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+
+    // Header row
+    worksheet.mergeCells('A1:O1');
+    worksheet.getCell('A1').value = 'Monthly Summaries Report';
+    worksheet.getCell('A1').font = { size: 16, bold: true };
+    worksheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+    
+    worksheet.getCell('A2').value = `Generated: ${new Date().toLocaleDateString()}`;
+    worksheet.getCell('A2').alignment = { horizontal: 'center' };
+    worksheet.getRow(2).height = 20;
+
+    // Column headers
+    const headers = [
+      'Employee Name', 'Email', 'Employee ID', 'Month', 'Year',
+      'Working Days', 'Worked Hours', 'OT Hours', 'Approved Leaves', 'Absent Days',
+      'Project', 'Client', 'Status', 'Invoice Number', 'Total Amount'
+    ];
+    
+    let row = 4;
+    headers.forEach((header, index) => {
+      const cell = worksheet.getCell(row, index + 1);
+      cell.value = header;
+      cell.font = { bold: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE0E0E0' }
+      };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    });
+    row++;
+
+    // Data rows
+    summaries.forEach(summary => {
+      worksheet.getCell(row, 1).value = summary.employee_name || 'N/A';
+      worksheet.getCell(row, 2).value = summary.employee_email || 'N/A';
+      worksheet.getCell(row, 3).value = summary.employee_id || 'N/A';
+      worksheet.getCell(row, 4).value = monthNames[summary.month - 1] || summary.month;
+      worksheet.getCell(row, 5).value = summary.year;
+      worksheet.getCell(row, 6).value = summary.total_working_days || 0;
+      worksheet.getCell(row, 7).value = summary.total_worked_hours.toFixed(2);
+      worksheet.getCell(row, 8).value = summary.total_ot_hours.toFixed(2);
+      worksheet.getCell(row, 9).value = summary.approved_leaves.toFixed(2);
+      worksheet.getCell(row, 10).value = summary.absent_days || 0;
+      worksheet.getCell(row, 11).value = summary.project_name || 'N/A';
+      worksheet.getCell(row, 12).value = summary.client_name || 'N/A';
+      worksheet.getCell(row, 13).value = summary.status || 'N/A';
+      worksheet.getCell(row, 14).value = summary.invoice_number || 'N/A';
+      worksheet.getCell(row, 15).value = summary.total_amount.toFixed(2);
+      
+      // Add borders to all cells in the row
+      for (let col = 1; col <= 15; col++) {
+        worksheet.getCell(row, col).border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+      }
+      
+      row++;
+    });
+
+    // Auto-fit columns
+    worksheet.columns.forEach(column => {
+      let maxLength = 0;
+      column.eachCell({ includeEmpty: true }, cell => {
+        if (cell.value) {
+          const cellLength = cell.value.toString().length;
+          if (cellLength > maxLength) {
+            maxLength = cellLength;
+          }
+        }
+      });
+      column.width = Math.min(maxLength + 2, 50);
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return buffer;
+  } catch (error) {
+    throw error;
+  }
+}
+
 module.exports = {
   generateMonthlySummaryExcel,
+  generateBulkMonthlySummariesExcel,
   generateAttendanceReportExcel,
   generateLeaveReportExcel,
   generateTimesheetReportExcel,

@@ -237,8 +237,6 @@ class _MonthlySummariesScreenState extends State<MonthlySummariesScreen> {
                               itemBuilder: (context, index) {
                                 final summary = _summaries[index];
                                 final status = summary['status'] ?? 'DRAFT';
-                                final month = summary['month'] ?? 1;
-                                final year = summary['year'] ?? DateTime.now().year;
                                 // Parse string values from backend (DECIMAL types come as strings)
                                 final totalHours = double.tryParse(
                                   summary['total_worked_hours']?.toString() ?? '0'
@@ -255,12 +253,18 @@ class _MonthlySummariesScreenState extends State<MonthlySummariesScreen> {
                                   ),
                                   child: InkWell(
                                     onTap: () {
+                                      final summaryId = summary['id']?.toString();
+                                      final summaryMonth = summary['month'] ?? _selectedMonth;
+                                      final summaryYear = summary['year'] ?? _selectedYear;
+                                      
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
                                           builder: (context) =>
                                               MonthlySummaryDetailScreen(
-                                            summaryId: summary['id'],
+                                            summaryId: summaryId,
+                                            month: summaryMonth,
+                                            year: summaryYear,
                                             onSigned: () {
                                               _loadSummaries();
                                             },
@@ -280,7 +284,7 @@ class _MonthlySummariesScreenState extends State<MonthlySummariesScreen> {
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
                                               Text(
-                                                '${_getMonthName(month)} $year',
+                                                '${_getMonthName(summary['month'] ?? _selectedMonth ?? 1)} ${summary['year'] ?? _selectedYear ?? DateTime.now().year}',
                                                 style: GoogleFonts.poppins(
                                                   fontSize: 18,
                                                   fontWeight: FontWeight.w600,

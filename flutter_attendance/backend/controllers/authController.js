@@ -1,111 +1,121 @@
-const crypto = require('crypto');
-const bcrypt = require('bcrypt');
-const db = require('../config/db');
-const { signToken } = require('../utils/jwt');
+const authService = require('../services/authService');
 
-const normalizeEmail = (email = '') => email.trim().toLowerCase();
-
-const createUser = async (email, password) => {
-  const existingUser = await db.query('SELECT id FROM users WHERE email = $1', [email]);
-  if (existingUser.rows.length) {
-    const error = new Error('Email already registered');
-    error.status = 409;
-    throw error;
-  }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  const userId = crypto.randomUUID();
-
-  const { rows } = await db.query(
-    'INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3) RETURNING id, email',
-    [userId, email, passwordHash],
-  );
-
-  return rows[0];
-};
-
+/**
+ * Register a new user
+ * POST /api/auth/register
+ */
 const register = async (req, res) => {
-  const email = normalizeEmail(req.body.email);
-  const password = req.body.password?.trim();
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-
   try {
-    const user = await createUser(email, password);
-    return res.status(201).json({ user });
-  } catch (error) {
-    console.error('Register error', error);
-    return res
-      .status(error.status || 500)
-      .json({ message: error.status ? error.message : 'Failed to register user' });
-  }
-};
+    const { name, email, password, role } = req.body;
 
-const signup = async (req, res) => {
-  const email = normalizeEmail(req.body.email);
-  const password = req.body.password?.trim();
+    // Validate required fields
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, password, and role are required',
+      });
+    }
 
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-
-  try {
-    const user = await createUser(email, password);
-    const token = signToken({ id: user.id, email: user.email });
+    // Register user
+    const user = await authService.registerUser(name, email, password, role);
 
     return res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      user,
+    });
+  } catch (error) {
+    console.error('Register error:', error);
+
+    // Handle duplicate email error
+    if (error.message.includes('already exists') || error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'User with this email already exists',
+      });
+    }
+
+    // Handle validation errors
+    if (
+      error.message.includes('required') ||
+      error.message.includes('Invalid') ||
+      error.message.includes('must be')
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    // Default error
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to register user',
+    });
+  }
+};
+
+/**
+ * Login user
+ * POST /api/auth/login
+ */
+const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate required fields
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required',
+      });
+    }
+
+    // Login user
+    const { token, user } = await authService.loginUser(email, password);
+
+    return res.json({
+      success: true,
+      message: 'Login successful',
       token,
       user,
     });
   } catch (error) {
-    console.error('Signup error', error);
-    return res
-      .status(error.status || 500)
-      .json({ message: error.status ? error.message : 'Failed to sign up user' });
-  }
-};
+    console.error('Login error:', error);
 
-const login = async (req, res) => {
-  const email = normalizeEmail(req.body.email);
-  const password = req.body.password?.trim();
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-
-  try {
-    const { rows } = await db.query('SELECT id, email, password_hash FROM users WHERE email = $1', [email]);
-    if (!rows.length) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+    // Handle invalid credentials
+    if (error.message.includes('Invalid credentials') || error.message.includes('not found')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password',
+      });
     }
 
-    const user = rows[0];
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+    // Handle inactive account
+    if (error.message.includes('inactive')) {
+      return res.status(403).json({
+        success: false,
+        message: error.message,
+      });
     }
 
-    const token = signToken({ id: user.id, email: user.email });
+    // Handle validation errors
+    if (error.message.includes('required')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
 
-    return res.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-      },
+    // Default error
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to login',
     });
-  } catch (error) {
-    console.error('Login error', error);
-    return res.status(500).json({ message: 'Failed to login user' });
   }
 };
 
 module.exports = {
   register,
   login,
-  signup,
 };
-

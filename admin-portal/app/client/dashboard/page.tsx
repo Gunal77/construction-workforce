@@ -30,24 +30,51 @@ export default function ClientDashboard() {
     try {
       setLoading(true);
       
-      // Fetch client info
-      const clientResponse = await fetch('/api/auth/me', {
-        credentials: 'include',
-      });
-      
-      if (clientResponse.ok) {
-        const clientData = await clientResponse.json();
-        setClientInfo(clientData.data);
+      // Fetch client info with error handling
+      try {
+        const clientResponse = await fetch('/api/auth/me', {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (clientResponse.ok) {
+          const clientData = await clientResponse.json();
+          // Handle both response formats
+          if (clientData.data) {
+            setClientInfo(clientData.data);
+          } else if (clientData.name) {
+            setClientInfo(clientData);
+          } else {
+            setClientInfo(clientData);
+          }
+        } else {
+          const errorText = await clientResponse.text();
+          console.error('Failed to fetch client info:', clientResponse.status, errorText);
+        }
+      } catch (authError) {
+        console.error('Error fetching client info:', authError);
       }
 
       // Fetch projects stats
-      const projectsResponse = await fetch('/api/proxy/client/projects/stats', {
-        credentials: 'include',
-      });
+      try {
+        const projectsResponse = await fetch('/api/proxy/client/projects/stats', {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
 
-      if (projectsResponse.ok) {
-        const projectsData = await projectsResponse.json();
-        setStats(projectsData);
+        if (projectsResponse.ok) {
+          const projectsData = await projectsResponse.json();
+          setStats(projectsData);
+        } else {
+          const errorText = await projectsResponse.text();
+          console.error('Failed to fetch project stats:', projectsResponse.status, errorText);
+        }
+      } catch (statsError) {
+        console.error('Error fetching project stats:', statsError);
       }
     } catch (error) {
       console.error('Error fetching dashboard data:', error);

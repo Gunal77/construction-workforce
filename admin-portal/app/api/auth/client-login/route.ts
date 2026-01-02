@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setAuthToken } from '@/lib/auth';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use unified auth endpoint
+    // Use unified auth endpoint (v2)
     const response = await fetch(`${API_BASE_URL}/api/v2/auth/login`, {
       method: 'POST',
       headers: {
@@ -32,8 +32,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user is a client
-    if (data.user?.role !== 'client') {
+    // Check if user is a client (handle both 'CLIENT' and 'client')
+    const userRole = data.user?.role?.toLowerCase();
+    if (userRole !== 'client') {
       return NextResponse.json(
         { message: 'Access denied. This portal is for clients only.' },
         { status: 403 }

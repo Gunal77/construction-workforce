@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['@supabase/supabase-js'],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {
