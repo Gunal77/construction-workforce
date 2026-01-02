@@ -3,7 +3,7 @@ import { cookies } from 'next/headers';
 
 
 export const dynamic = "force-dynamic";
-const API_BASE_URL = 'http://localhost:4000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 export async function POST(
   request: NextRequest,
