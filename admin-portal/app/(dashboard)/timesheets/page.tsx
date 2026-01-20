@@ -410,8 +410,8 @@ export default function TimesheetsPage() {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
         (t) =>
-          t.staff_name.toLowerCase().includes(query) ||
-          t.staff_email.toLowerCase().includes(query) ||
+          t.staff_name?.toLowerCase().includes(query) ||
+          t.staff_email?.toLowerCase().includes(query) ||
           t.project_name?.toLowerCase().includes(query) ||
           t.task_type?.toLowerCase().includes(query)
       );
