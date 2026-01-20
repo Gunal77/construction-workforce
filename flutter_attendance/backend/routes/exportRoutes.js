@@ -10,7 +10,9 @@ const staffMiddleware = async (req, res, next) => {
     return res.status(401).json({ message: 'Authentication required' });
   }
 
-  if (req.user.role !== 'WORKER') {
+  // Check role (handle both uppercase and lowercase)
+  const userRole = req.user.role?.toUpperCase();
+  if (userRole !== 'WORKER') {
     return res.status(403).json({ message: 'Worker privileges required' });
   }
 

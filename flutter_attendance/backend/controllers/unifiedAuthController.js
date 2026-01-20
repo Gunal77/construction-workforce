@@ -78,13 +78,15 @@ const unifiedLogin = async (req, res) => {
 
     // Generate JWT token with role
     // Ensure userId and id are strings for consistent token payload
+    // Normalize role to uppercase for consistency
     const userIdString = user._id.toString();
+    const normalizedRole = user.role?.toUpperCase() || user.role;
     const token = signToken({
       userId: userIdString,
       id: userIdString,
       email: user.email,
-      role: user.role,
-      userType: user.role.toLowerCase()
+      role: normalizedRole,
+      userType: normalizedRole.toLowerCase()
     });
 
     const userData = user.toJSON();

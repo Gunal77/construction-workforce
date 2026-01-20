@@ -19,17 +19,26 @@ const unifiedAuthMiddleware = (allowedRoles = []) => {
     try {
       const decoded = verifyToken(token);
 
-      // Check if user has required role
-      if (allowedRoles.length > 0 && !allowedRoles.includes(decoded.role)) {
-        return res.status(403).json({ 
-          success: false,
-          message: `Access denied. Required role: ${allowedRoles.join(' or ')}` 
-        });
+      // Normalize role to uppercase for consistency
+      const userRole = decoded.role?.toUpperCase();
+
+      // Check if user has required role (normalize allowed roles too)
+      if (allowedRoles.length > 0) {
+        const normalizedAllowedRoles = allowedRoles.map(role => role.toUpperCase());
+        if (!normalizedAllowedRoles.includes(userRole)) {
+          return res.status(403).json({ 
+            success: false,
+            message: `Access denied. Required role: ${allowedRoles.join(' or ')}` 
+          });
+        }
       }
 
-      // Attach user to request
-      req.user = decoded;
-      req.admin = decoded; // For backwards compatibility with existing code
+      // Attach user to request with normalized role
+      req.user = {
+        ...decoded,
+        role: userRole
+      };
+      req.admin = req.user; // For backwards compatibility with existing code
       
       next();
     } catch (error) {

@@ -59,11 +59,13 @@ const authMiddleware = async (req, res, next) => {
       }
 
       // Attach user data to request object
+      // Normalize role to uppercase for consistency
       req.user = {
         userId: user.id,
         email: user.email,
         name: user.name,
-        role: user.role,
+        role: user.role?.toUpperCase() || user.role,
+        id: user.id, // Also add id for compatibility
       };
 
       next();
